@@ -575,7 +575,15 @@ class Pipe:
         initial_results=None,
     ):
         """Initialize or reset research state consistently across interactive and non-interactive modes"""
-        state = self.get_state()
+        logger.debug("★★★ ENTERING initialize_research_state ★★★")
+        logger.debug(f"Parameters: user_message={user_message[:100]}..., research_outline={len(research_outline)} items, all_topics={len(all_topics)} items")
+
+        try:
+            state = self.get_state()
+            logger.debug("Got state in initialize_research_state")
+        except Exception as e:
+            logger.error(f"★★★ ERROR GETTING STATE IN initialize_research_state: {e} ★★★", exc_info=True)
+            raise
 
         # Core research state
         self.update_state(
@@ -632,43 +640,79 @@ class Pipe:
         self.update_state("search_history", search_history)
 
         # Initialize dimension tracking
-        logger.debug("About to call initialize_research_dimensions")
-        await self.initialize_research_dimensions(all_topics, user_message)
-        logger.debug("Returned from initialize_research_dimensions")
+        try:
+            logger.debug("About to call initialize_research_dimensions")
+            await self.initialize_research_dimensions(all_topics, user_message)
+            logger.debug("★★★ Returned from initialize_research_dimensions ★★★")
 
-        research_dimensions = state.get("research_dimensions")
-        if research_dimensions:
-            self.update_state(
-                "latest_dimension_coverage", research_dimensions["coverage"].copy()
-            )
-            logger.debug("Updated latest_dimension_coverage")
-        else:
-            logger.debug("No research_dimensions found in state")
+            # Get fresh state after initialization
+            state = self.get_state()
+            logger.debug("Got fresh state after research dimensions initialization")
 
-        # Source tracking
-        self.update_state("master_source_table", state.get("master_source_table", {}))
-        self.update_state("url_selected_count", state.get("url_selected_count", {}))
-        self.update_state("url_token_counts", state.get("url_token_counts", {}))
+            research_dimensions = state.get("research_dimensions")
+            logger.debug(f"Research dimensions from state: {research_dimensions is not None}")
+
+            if research_dimensions:
+                logger.debug(f"Research dimensions keys: {list(research_dimensions.keys())}")
+                logger.debug(f"Coverage length: {len(research_dimensions.get('coverage', []))}")
+                self.update_state(
+                    "latest_dimension_coverage", research_dimensions["coverage"].copy()
+                )
+                logger.debug("Updated latest_dimension_coverage")
+            else:
+                logger.debug("No research_dimensions found in state")
+
+            # Source tracking
+            logger.debug("Updating source tracking state")
+            self.update_state("master_source_table", state.get("master_source_table", {}))
+            self.update_state("url_selected_count", state.get("url_selected_count", {}))
+            self.update_state("url_token_counts", state.get("url_token_counts", {}))
+            logger.debug("Source tracking state updated")
+        except Exception as e:
+            logger.error(f"★★★ ERROR AFTER RESEARCH DIMENSIONS: {e} ★★★", exc_info=True)
+            # Continue with default values if there's an error
+            self.update_state("master_source_table", {})
+            self.update_state("url_selected_count", {})
+            self.update_state("url_token_counts", {})
 
         # Trajectory accumulator reset
+        logger.debug("Resetting trajectory accumulator")
         self.trajectory_accumulator = None
+        logger.debug("Trajectory accumulator reset complete")
 
-        logger.info(
-            f"Research state initialized with {len(all_topics)} topics and {len(results_history)} initial results"
-        )
+        try:
+            logger.debug(f"About to log research state initialization with {len(all_topics)} topics")
+            logger.info(
+                f"Research state initialized with {len(all_topics)} topics and {len(results_history)} initial results"
+            )
+            logger.debug("Research state initialization logged successfully")
+            logger.debug("★★★ EXITING initialize_research_state SUCCESSFULLY ★★★")
+        except Exception as e:
+            logger.error(f"★★★ ERROR LOGGING RESEARCH STATE: {e} ★★★", exc_info=True)
+            logger.debug("★★★ EXITING initialize_research_state WITH ERROR ★★★")
 
     async def update_token_counts(self, new_results=None):
         """Centralized function to update token counts consistently"""
-        state = self.get_state()
-        memory_stats = state.get(
-            "memory_stats",
-            {
-                "results_tokens": 0,
-                "section_tokens": {},
-                "synthesis_tokens": 0,
-                "total_tokens": 0,
-            },
-        )
+        logger.debug("★★★ ENTERING update_token_counts ★★★")
+        logger.debug(f"new_results: {new_results is not None}")
+
+        try:
+            state = self.get_state()
+            logger.debug("Got state in update_token_counts")
+
+            memory_stats = state.get(
+                "memory_stats",
+                {
+                    "results_tokens": 0,
+                    "section_tokens": {},
+                    "synthesis_tokens": 0,
+                    "total_tokens": 0,
+                },
+            )
+            logger.debug(f"Got memory_stats: {memory_stats.keys()}")
+        except Exception as e:
+            logger.error(f"★★★ ERROR GETTING STATE/MEMORY_STATS IN update_token_counts: {e} ★★★", exc_info=True)
+            raise
 
         # Update results tokens if new results provided
         if new_results:
@@ -700,9 +744,16 @@ class Pipe:
         )
 
         # Update state
-        self.update_state("memory_stats", memory_stats)
-
-        return memory_stats
+        try:
+            logger.debug("About to update memory_stats in state")
+            self.update_state("memory_stats", memory_stats)
+            logger.debug("Memory_stats updated in state successfully")
+            logger.debug("★★★ EXITING update_token_counts SUCCESSFULLY ★★★")
+            return memory_stats
+        except Exception as e:
+            logger.error(f"★★★ ERROR UPDATING MEMORY_STATS: {e} ★★★", exc_info=True)
+            logger.debug("★★★ EXITING update_token_counts WITH ERROR ★★★")
+            raise
 
     def get_state(self):
         """Get the current conversation state"""
@@ -5791,10 +5842,13 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
     async def emit_status(self, level: str, message: str, done: bool = False):
         """Emit a status message to the client"""
+        logger.debug(f"★★★ ENTERING emit_status: level={level}, message={message[:100]}..., done={done} ★★★")
         try:
             # Check if research is completed
             state = self.get_state()
+            logger.debug("Got state in emit_status")
             research_completed = state.get("research_completed", False)
+            logger.debug(f"Research completed: {research_completed}")
 
             if research_completed and not done:
                 status = "complete"
@@ -5812,9 +5866,11 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                     },
                 }
             )
+            logger.debug(f"★★★ EXITING emit_status SUCCESSFULLY: {message[:50]}... ★★★")
 
         except Exception as e:
-            logger.error(f"Error emitting status: {e}")
+            logger.error(f"★★★ ERROR IN emit_status: {e} ★★★", exc_info=True)
+            logger.debug(f"★★★ EXITING emit_status WITH ERROR: {message[:50]}... ★★★")
             # Can't do much if this fails, but we don't want to crash
 
     async def emit_synthesis_status(self, message, is_done=False):
@@ -10214,6 +10270,7 @@ Format your response as a clear, structured Markdown list. For example:
             await self.emit_message(outline_text)
 
             # Initialize research state consistently
+            logger.debug("★★★ ABOUT TO CALL initialize_research_state ★★★")
             await self.initialize_research_state(
                 user_message,
                 research_outline,
@@ -10221,19 +10278,26 @@ Format your response as a clear, structured Markdown list. For example:
                 outline_embedding,
                 initial_results,
             )
+            logger.debug("★★★ RETURNED FROM initialize_research_state ★★★")
 
             # Update token counts
+            logger.debug("★★★ ABOUT TO UPDATE TOKEN COUNTS ★★★")
             await self.update_token_counts(initial_results)
+            logger.debug("★★★ TOKEN COUNTS UPDATED ★★★")
 
             # Display message about continuing
+            logger.debug("★★★ ABOUT TO EMIT CONTINUING MESSAGE ★★★")
             await self.emit_message(
                 "\n*Continuing with research outline...*\n\n"
             )
+            logger.debug("★★★ CONTINUING MESSAGE EMITTED ★★★")
 
         # Update status to show we've moved beyond outline generation
+        logger.debug("★★★ ABOUT TO UPDATE STATUS TO BEGINNING RESEARCH CYCLES ★★★")
         await self.emit_status(
             "info", "Research outline generated. Beginning research cycles...", False
         )
+        logger.debug("★★★ STATUS UPDATED TO BEGINNING RESEARCH CYCLES ★★★")
 
         # Initialize research variables for continued cycles
         cycle = 1  # We've already done one cycle with the initial queries
