@@ -50,31 +50,56 @@ class EmbeddingCache:
 
     def __init__(self, max_size=10000000):
         self.cache = {}
+        self.access_order = []  # Track access order for LRU
         self.max_size = max_size
         self.hit_count = 0
         self.miss_count = 0
         self.url_token_counts = {}  # Track token counts for URLs
 
+    def _generate_key(self, text_key):
+        """Generate a more reliable cache key"""
+        import hashlib
+        # Use SHA256 for better collision resistance
+        text_sample = text_key[:2000] if len(text_key) > 2000 else text_key
+        return hashlib.sha256(text_sample.encode('utf-8')).hexdigest()[:16]
+
     def get(self, text_key):
         """Get embedding from cache using text as key"""
-        # Use a hash of the text as the key to limit memory usage
-        key = hash(text_key[:2000])
+        key = self._generate_key(text_key)
         result = self.cache.get(key)
         if result is not None:
             self.hit_count += 1
-        return result
+            # Update access order for LRU
+            if key in self.access_order:
+                self.access_order.remove(key)
+            self.access_order.append(key)
+            return result
+        else:
+            self.miss_count += 1
+            return None
 
     def set(self, text_key, embedding):
         """Store embedding in cache"""
-        # Use a hash of the text as the key to limit memory usage
-        key = hash(text_key[:2000])
-        self.cache[key] = embedding
-        self.miss_count += 1
+        key = self._generate_key(text_key)
 
-        # Simple LRU-like pruning if cache gets too large
-        if len(self.cache) > self.max_size:
-            # Remove a random key as a simple eviction strategy
-            self.cache.pop(next(iter(self.cache)))
+        # If key already exists, just update and move to end
+        if key in self.cache:
+            self.cache[key] = embedding
+            if key in self.access_order:
+                self.access_order.remove(key)
+            self.access_order.append(key)
+            return
+
+        # Add new entry
+        self.cache[key] = embedding
+        self.access_order.append(key)
+
+        # LRU eviction if cache is too large
+        while len(self.cache) > self.max_size:
+            # Remove least recently used item
+            oldest_key = self.access_order.pop(0)
+            if oldest_key in self.cache:
+                del self.cache[oldest_key]
 
     def stats(self):
         """Return cache statistics"""
@@ -93,27 +118,55 @@ class TransformationCache:
 
     def __init__(self, max_size=2500000):
         self.cache = {}
+        self.access_order = []  # Track access order for LRU
         self.max_size = max_size
         self.hit_count = 0
         self.miss_count = 0
 
+    def _generate_key(self, text, transform_id):
+        """Generate a more reliable cache key"""
+        import hashlib
+        text_sample = text[:2000] if len(text) > 2000 else text
+        combined = f"{text_sample}_{str(transform_id)}"
+        return hashlib.sha256(combined.encode('utf-8')).hexdigest()[:16]
+
     def get(self, text, transform_id):
         """Get transformed embedding from cache"""
-        key = f"{hash(text[:2000])}_{hash(str(transform_id))}"
+        key = self._generate_key(text, transform_id)
         result = self.cache.get(key)
         if result is not None:
             self.hit_count += 1
-        return result
+            # Update access order for LRU
+            if key in self.access_order:
+                self.access_order.remove(key)
+            self.access_order.append(key)
+            return result
+        else:
+            self.miss_count += 1
+            return None
 
     def set(self, text, transform_id, transformed_embedding):
         """Store transformed embedding in cache"""
-        key = f"{hash(text[:2000])}_{hash(str(transform_id))}"
-        self.cache[key] = transformed_embedding
-        self.miss_count += 1
+        key = self._generate_key(text, transform_id)
 
-        # Simple LRU-like pruning if cache gets too large
-        if len(self.cache) > self.max_size:
-            self.cache.pop(next(iter(self.cache)))
+        # If key already exists, just update and move to end
+        if key in self.cache:
+            self.cache[key] = transformed_embedding
+            if key in self.access_order:
+                self.access_order.remove(key)
+            self.access_order.append(key)
+            return
+
+        # Add new entry
+        self.cache[key] = transformed_embedding
+        self.access_order.append(key)
+
+        # LRU eviction if cache is too large
+        while len(self.cache) > self.max_size:
+            # Remove least recently used item
+            oldest_key = self.access_order.pop(0)
+            if oldest_key in self.cache:
+                del self.cache[oldest_key]
 
     def stats(self):
         """Return cache statistics"""
@@ -441,6 +494,24 @@ class Pipe:
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self.valves.THREAD_WORKERS
         )
+
+    def __del__(self):
+        """Cleanup resources when the object is destroyed"""
+        self.cleanup_resources()
+
+    def cleanup_resources(self):
+        """Clean up ThreadPoolExecutor and other resources"""
+        if hasattr(self, 'executor') and self.executor:
+            try:
+                self.executor.shutdown(wait=True)
+                logger.info("ThreadPoolExecutor cleaned up successfully")
+            except Exception as e:
+                logger.warning(f"Error during executor cleanup: {e}")
+                # Force shutdown if graceful shutdown fails
+                try:
+                    self.executor.shutdown(wait=False)
+                except:
+                    pass
         
     def _flatten_outline_topics(self, outline: List[Dict]) -> List[str]:
         """
@@ -453,7 +524,7 @@ class Pipe:
                 # Add the main topic string
                 if "topic" in item and isinstance(item["topic"], str):
                     all_topics.append(item["topic"])
-                
+
                 # Recursively process subtopics
                 if "subtopics" in item and isinstance(item["subtopics"], list):
                     for subtopic in item["subtopics"]:
@@ -468,11 +539,6 @@ class Pipe:
             elif isinstance(item, str):  # Handle cases where a subtopic list might just contain strings
                 all_topics.append(item)
         return all_topics
-
-        self.research_date = datetime.now().strftime("%Y-%m-%d")
-        self.executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.valves.THREAD_WORKERS
-        )
 
     async def initialize_research_state(
         self,
@@ -683,22 +749,7 @@ class Pipe:
         if cached_embedding is not None:
             return cached_embedding
 
-    def _flatten_outline_topics(self, outline: List[Dict]) -> List[str]:
-        """
-        Recursively flattens a nested research outline into a single list of topic strings.
-        Handles any level of nesting in the outline structure.
-        """
-        all_topics = []
-        for item in outline:
-            if isinstance(item, dict):
-                if "topic" in item and isinstance(item["topic"], str):
-                    all_topics.append(item["topic"])
-                if "subtopics" in item and isinstance(item["subtopics"], list):
-                    all_topics.extend(self._flatten_outline_topics(item["subtopics"]))
-            elif isinstance(item, str):
-                all_topics.append(item)
-        return all_topics
-        # ...existing code...
+
     # Add robust JSON parsing with fallback
     async def parse_json_with_fallback(self, json_str: str, user_message: str) -> Tuple[List[dict], List[str]]:
         """Attempts to parse JSON with retries and fallback mechanism"""
@@ -751,53 +802,19 @@ class Pipe:
                 )
                 # Use the fallback outline when all else fails
                 return await self.create_fallback_outline(user_message)
-                
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Initial JSON parse failed: {e}. Attempting repair...")
-                await self.emit_user_message(
-                    "The research outline structure needs some adjustments.\nI'll fix this automatically.\n",
-                    "info"
-                )
-                
-                try:
-                    # Try to repair and reparse the JSON
-                    repair_messages = [
-                        {"role": "system", "content": "You are a JSON repair specialist. Fix the JSON structure while preserving content."},
-                        {"role": "user", "content": f"Fix this JSON. Return only valid JSON:\n{json_str}"}
-                    ]
-                    
-                    repair_response = await generate_chat_completions(
-                        messages=repair_messages,
-                        model=self.valves.QUALITY_FILTER_MODEL
-                    )
-                    
-                    if not repair_response or "choices" not in repair_response:
-                        raise ValueError("Failed to get repair response")
-                        
-                    repaired_json_str = repair_response["choices"][0]["message"]["content"]
-                    
-                    # Inform user about repair attempt
-                    await self.emit_user_message(
-                        "Attempting to repair the outline structure...\n",
-                        "info"
-                    )
-                    
-                    # Try parsing the repaired JSON
-                    return await parse_json_with_fallback(repaired_json_str, user_message)
-                    
-                except Exception as repair_err:
-                    logger.error(f"JSON repair failed: {repair_err}", exc_info=True)
-                    
-                    # Send a reassuring message to the user
-                    await self.emit_user_message(
-                        "I encountered an issue with the outline structure, but don't worry!\n"
-                        "I'll use a reliable alternative structure to continue the research.\n"
-                        "Your research process will continue smoothly.",
-                        "warning"
-                    )
-                    
-                    # Use the fallback outline when all else fails
-                    return await self.create_fallback_outline(user_message)
+
+    async def get_embedding(self, text: str) -> Optional[List[float]]:
+        """Get embedding for a text string using the configured embedding model with caching"""
+        if not text or not text.strip():
+            return None
+
+        text = text[:2000]
+        text = text.replace(":", " - ")
+
+        # Check cache first
+        cached_embedding = self.embedding_cache.get(text)
+        if cached_embedding is not None:
+            return cached_embedding
 
         # If not in cache, get from API
         try:
@@ -3724,8 +3741,8 @@ class Pipe:
                     else domain
                 ),
                 domain + " research",
-                domain + " " + query if "query" in locals() else domain,
-                query if "query" in locals() else domain + " publication",
+                domain + " academic",
+                domain + " publication",
             ]
 
             # Filter out empty or very short ones
