@@ -844,9 +844,19 @@ class Pipe:
                     {"role": "system", "content": "You are a JSON repair specialist. Fix the JSON structure while preserving content. Return ONLY valid JSON, no explanations."},
                     {"role": "user", "content": f"Fix this broken JSON and return only the corrected JSON:\n{cleaned_json[:1000]}"}  # Limit length
                 ]
+
+                # Prepare form data for the API call
+                form_data = {
+                    "model": self.valves.QUALITY_FILTER_MODEL,
+                    "messages": repair_messages,
+                    "stream": False,
+                    "temperature": 0.3,
+                }
+
                 repair_response = await generate_chat_completions(
-                    messages=repair_messages,
-                    model=self.valves.QUALITY_FILTER_MODEL
+                    self.__request__,
+                    form_data,
+                    user=self.__user__,
                 )
                 if not repair_response or "choices" not in repair_response:
                     raise ValueError("Failed to get repair response")
