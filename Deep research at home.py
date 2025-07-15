@@ -5832,10 +5832,21 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
     async def emit_message(self, message: str):
         """Emit a message to the client"""
+        logger.debug(f"★★★ ENTERING emit_message: message length={len(message)}, first 100 chars: {message[:100]}... ★★★")
         try:
+            # Add a small delay to ensure message is processed by the frontend
+            # This helps prevent race conditions with the "completed" signal
+            logger.debug("About to emit message to client")
             await self.__current_event_emitter__(
                 {"type": "message", "data": {"content": message}}
             )
+            logger.debug("Message emitted successfully")
+
+            # Add a small delay after emitting the message
+            # This gives the frontend time to process and render the message
+            # before potentially receiving a "completed" signal
+            await asyncio.sleep(0.5)
+            logger.debug("Completed delay after emitting message")
         except Exception as e:
             logger.error(f"Error emitting message: {e}")
             # Can't do much if this fails, but we don't want to crash
@@ -6225,26 +6236,25 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         self, outline_items: List[Dict], original_query: str
     ) -> Dict:
         """Process user feedback on research outline items by asking for feedback in chat"""
+        logger.debug("★★★ ENTERING process_user_outline_feedback ★★★")
+        logger.debug(f"outline_items type: {type(outline_items)}, length: {len(outline_items)}")
+
         # Number each outline item (maintain hierarchy but flatten for numbering)
         numbered_outline = []
         flat_items = []
 
-        # Process the hierarchical outline structure
-        item_num = 1
-        for topic_item in outline_items:
-            topic = topic_item.get("topic", "")
-            subtopics = topic_item.get("subtopics", [])
+        # Use the existing _flatten_outline_topics method to properly extract all topic strings
+        logger.debug("Using _flatten_outline_topics to safely extract all topics")
+        flat_items = self._flatten_outline_topics(outline_items)
+        logger.debug(f"Flattened {len(flat_items)} topics from outline")
 
-            # Add main topic with number
-            flat_items.append(topic)
-            numbered_outline.append(f"{item_num}. {topic}")
-            item_num += 1
+        # Create numbered outline for display
+        for i, topic in enumerate(flat_items, 1):
+            numbered_outline.append(f"{i}. {topic}")
+            logger.debug(f"Added numbered item {i}: {topic}")
 
-            # Add subtopics with numbers
-            for subtopic in subtopics:
-                flat_items.append(subtopic)
-                numbered_outline.append(f"{item_num}. {subtopic}")
-                item_num += 1
+        logger.debug(f"Created numbered outline with {len(numbered_outline)} items")
+        logger.debug("★★★ OUTLINE PROCESSING COMPLETE ★★★")
 
         # Prepare the outline display
         outline_display = "\n".join(numbered_outline)
@@ -6400,6 +6410,9 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
     async def process_outline_feedback_continuation(self, user_message: str):
         """Process the user feedback received in a continuation call"""
+        logger.debug("★★★ ENTERING process_outline_feedback_continuation ★★★")
+        logger.debug(f"User message: '{user_message}'")
+
         # Get the data from the previous call
         state = self.get_state()
         feedback_data = state.get("outline_feedback_data", {})
@@ -6407,21 +6420,49 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         flat_items = feedback_data.get("flat_items", [])
         original_query = feedback_data.get("original_query", "")
 
+        logger.debug(f"Retrieved feedback_data: outline_items={len(outline_items)}, flat_items={len(flat_items)}")
+        logger.debug(f"flat_items types: {[type(item) for item in flat_items[:5]]}")  # Check first 5 items
+
+        # Validate flat_items - ensure all items are strings
+        validated_flat_items = []
+        for i, item in enumerate(flat_items):
+            if isinstance(item, str):
+                validated_flat_items.append(item)
+                logger.debug(f"Item {i} is valid string: {item[:50]}...")
+            elif isinstance(item, dict):
+                # Extract topic from dict if possible
+                topic = item.get("topic", str(item))
+                validated_flat_items.append(topic)
+                logger.warning(f"Item {i} was dict, extracted topic: {topic[:50]}...")
+            else:
+                # Convert to string as fallback
+                str_item = str(item)
+                validated_flat_items.append(str_item)
+                logger.warning(f"Item {i} was {type(item)}, converted to string: {str_item[:50]}...")
+
+        flat_items = validated_flat_items
+        logger.debug(f"Validated flat_items: {len(flat_items)} items, all strings")
+
         # Process the user input
         user_input = user_message.strip()
+        logger.debug(f"Processing user input: '{user_input}'")
 
         # If user just wants to continue with all items
         if user_input.lower() == "continue" or not user_input:
+            logger.debug("User chose to continue with all items")
             await self.emit_message(
                 "\n*Continuing with all research outline items.*\n\n"
             )
-            return {
+            result = {
                 "kept_items": flat_items,
                 "removed_items": [],
                 "kept_indices": list(range(len(flat_items))),
                 "removed_indices": [],
                 "preference_vector": {"pdv": None, "strength": 0.0, "impact": 0.0},
             }
+            logger.debug(f"Returning result with {len(result['kept_items'])} kept items")
+            logger.debug("★★★ EXITING process_outline_feedback_continuation (CONTINUE) ★★★")
+            return result
 
         # Check if it's a slash command (keep or remove)
         slash_keep_patterns = [r"^/k\s", r"^/keep\s"]
@@ -6837,9 +6878,18 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         outline_embedding,
     ):
         """Continue the research process after receiving user feedback on the outline"""
+        logger.debug("★★★ ENTERING continue_research_after_feedback ★★★")
+        logger.debug(f"feedback_result keys: {list(feedback_result.keys())}")
+
         kept_items = feedback_result["kept_items"]
         removed_items = feedback_result["removed_items"]
         preference_vector = feedback_result["preference_vector"]
+
+        logger.debug(f"kept_items: {len(kept_items)} items")
+        logger.debug(f"kept_items types: {[type(item) for item in kept_items[:5]]}")  # Check first 5 items
+        logger.debug(f"removed_items: {len(removed_items)} items")
+        logger.debug(f"all_topics: {len(all_topics)} items")
+        logger.debug(f"all_topics types: {[type(item) for item in all_topics[:5]]}")  # Check first 5 items
 
         # If there are no removed items, skip the replacement logic and return original outline
         if not removed_items:
@@ -9577,6 +9627,12 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         if not messages:
             return ""
 
+        # Get the user message for debugging
+        user_message = messages[-1].get("content", "").strip()
+        logger.debug("★★★ PIPE FUNCTION CALLED ★★★")
+        logger.debug(f"User message: '{user_message}'")
+        logger.debug(f"Messages count: {len(messages)}")
+
         # First message ID in the conversation serves as our conversation identifier
         first_message = messages[0] if messages else {}
         conversation_id = f"{__user__['id']}_{first_message.get('id', 'default')}"
@@ -9636,27 +9692,63 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         state = self.get_state()
 
         # Check waiting flag directly in state
-        if state.get("waiting_for_outline_feedback", False):
+        waiting_for_feedback = state.get("waiting_for_outline_feedback", False)
+        logger.debug(f"★★★ CHECKING WAITING_FOR_OUTLINE_FEEDBACK: {waiting_for_feedback} ★★★")
+
+        if waiting_for_feedback:
+            logger.debug("We are waiting for outline feedback")
             # We're expecting outline feedback - capture the core outline data
             # to ensure it's not lost in state transitions
             feedback_data = state.get("outline_feedback_data", {})
+            logger.debug(f"feedback_data exists: {bool(feedback_data)}")
             if feedback_data:
+                logger.debug(f"feedback_data keys: {list(feedback_data.keys())}")
+                logger.debug(f"flat_items in feedback_data: {len(feedback_data.get('flat_items', []))} items")
+
+                # Check if user message is 'continue'
+                if user_message.strip().lower() == "continue":
+                    logger.debug("★★★ USER ENTERED 'continue' COMMAND ★★★")
+
                 # Process the user's feedback
                 self.update_state("waiting_for_outline_feedback", False)
-                feedback_result = await self.process_outline_feedback_continuation(
-                    user_message
-                )
+                logger.debug("About to call process_outline_feedback_continuation")
+                try:
+                    feedback_result = await self.process_outline_feedback_continuation(
+                        user_message
+                    )
+                    logger.debug(f"process_outline_feedback_continuation returned successfully with {len(feedback_result.get('kept_items', []))} kept items")
+                except Exception as e:
+                    logger.error(f"★★★ ERROR IN process_outline_feedback_continuation: {e} ★★★", exc_info=True)
+                    # Create a fallback response to recover from error
+                    feedback_data_flat_items = feedback_data.get('flat_items', [])
+                    # Ensure all items are strings
+                    validated_items = []
+                    for item in feedback_data_flat_items:
+                        if isinstance(item, str):
+                            validated_items.append(item)
+                        elif isinstance(item, dict) and "topic" in item:
+                            validated_items.append(item["topic"])
+                        else:
+                            validated_items.append(str(item))
+
+                    feedback_result = {
+                        "kept_items": validated_items,
+                        "removed_items": [],
+                        "kept_indices": list(range(len(validated_items))),
+                        "removed_indices": [],
+                        "preference_vector": {"pdv": None, "strength": 0.0, "impact": 0.0},
+                    }
+                    logger.debug(f"Created fallback feedback_result with {len(validated_items)} items")
 
                 # Get the research state parameters directly from feedback data
                 original_query = feedback_data.get("original_query", "")
                 outline_items = feedback_data.get("outline_items", [])
                 flat_items = feedback_data.get("flat_items", [])
 
-                # Retrieve all_topics and outline_embedding if we have them
-                all_topics = []
-                for topic_item in outline_items:
-                    all_topics.append(topic_item["topic"])
-                    all_topics.extend(topic_item.get("subtopics", []))
+                # Retrieve all_topics using the safe flattening method
+                logger.debug("★★★ SAFELY EXTRACTING ALL_TOPICS FROM OUTLINE_ITEMS ★★★")
+                all_topics = self._flatten_outline_topics(outline_items)
+                logger.debug(f"Extracted {len(all_topics)} topics safely")
 
                 # Update outline embedding based on all_topics
                 outline_text = " ".join(all_topics)
@@ -9677,431 +9769,361 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                 user_message = original_query
 
                 # Initialize research state consistently
+                logger.debug("★★★ ABOUT TO CALL initialize_research_state AFTER FEEDBACK ★★★")
                 await self.initialize_research_state(
                     user_message,
                     research_outline,
                     all_topics,
                     outline_embedding,
                 )
+                logger.debug("★★★ RETURNED FROM initialize_research_state AFTER FEEDBACK ★★★")
 
                 # Update token counts
+                logger.debug("★★★ ABOUT TO UPDATE TOKEN COUNTS AFTER FEEDBACK ★★★")
                 await self.update_token_counts()
+                logger.debug("★★★ TOKEN COUNTS UPDATED AFTER FEEDBACK ★★★")
+
+                # ★★★ CRITICAL FIX: Jump directly to research cycles after feedback processing ★★★
+                logger.debug("★★★ JUMPING TO RESEARCH CYCLES AFTER FEEDBACK PROCESSING ★★★")
+                # Set initial_results to empty since we'll regenerate search results
+                initial_results = []
+                # Jump to the research cycles section
+                await self.emit_status(
+                    "info", "Research outline updated. Beginning research cycles...", False
+                )
+                # Set the flag to skip the initial setup and go directly to cycles
+                skip_initial_setup = True
+                logger.debug("★★★ SET skip_initial_setup = True ★★★")
             else:
                 # If we're supposedly waiting for feedback but have no data,
                 # treat as normal query (recover from error state)
                 self.update_state("waiting_for_outline_feedback", False)
                 logger.warning("Waiting for outline feedback but no data available")
-
-        # Check if this is a follow-up query
-        is_follow_up = await self.is_follow_up_query(messages)
-        self.update_state("follow_up_mode", is_follow_up)
-
-        # Get summary embedding if this is a follow-up
-        summary_embedding = None
-        if is_follow_up:
-            prev_comprehensive_summary = state.get("prev_comprehensive_summary", "")
-            if prev_comprehensive_summary:
-                try:
-                    await self.emit_status(
-                        "info", "Processing follow-up query...", False
-                    )
-                    summary_embedding = await self.get_embedding(
-                        prev_comprehensive_summary
-                    )
-                    await self.emit_message("## Deep Research Mode: Follow-up\n\n")
-                    await self.emit_message(
-                        "I'll continue researching based on your follow-up query while considering our previous findings.\n\n"
-                    )
-                except Exception as e:
-                    logger.error(f"Error getting summary embedding: {e}")
-                    # Continue without the summary embedding if there's an error
-                    is_follow_up = False
-                    self.update_state("follow_up_mode", False)
-                    await self.emit_message("## Deep Research Mode: Activated\n\n")
-                    await self.emit_message(
-                        "I'll search for comprehensive information about your query. This might take a moment...\n\n"
-                    )
-            else:
-                is_follow_up = False
-                self.update_state("follow_up_mode", False)
+                skip_initial_setup = False
+                logger.debug("★★★ SET skip_initial_setup = False (no feedback data) ★★★")
         else:
-            await self.emit_status("info", "Starting deep research...", False)
-            await self.emit_message("## Deep Research Mode: Activated\n\n")
-            await self.emit_message(
-                "I'll search for comprehensive information about your query. This might take a moment...\n\n"
-            )
+            skip_initial_setup = False
+            logger.debug("★★★ SET skip_initial_setup = False (not waiting for feedback) ★★★")
 
-        # Check if we have research state from previous feedback
-        research_state = state.get("research_state")
-        if research_state:
-            # Use the existing research state from feedback
-            research_outline = research_state.get("research_outline", [])
-            all_topics = research_state.get("all_topics", [])
-            outline_embedding = research_state.get("outline_embedding")
-            user_message = research_state.get("user_message", user_message)
+        # ★★★ CRITICAL FIX: Initialize variables that might be used later ★★★
+        # This fixes the issue where user enters "continue" after outline feedback
+        # and the plugin gets stuck in a loop asking for feedback again.
+        # The fix ensures that after processing feedback, we skip the initial setup
+        # and jump directly to the research cycles.
+        initial_results = []  # Initialize to empty list by default
+        research_outline = []  # Initialize research outline to empty list by default
+        all_topics = []  # Initialize all_topics to empty list by default
+        outline_embedding = None  # Initialize outline_embedding to None by default
 
-            await self.emit_status(
-                "info", "Continuing research with updated outline...", False
-            )
+        # ★★★ CRITICAL FIX: Skip initial setup if we just processed feedback ★★★
+        if not skip_initial_setup:
+            logger.debug("★★★ PROCEEDING WITH INITIAL SETUP (NOT SKIPPING) ★★★")
 
-            # Skip to research cycles
-            initial_results = []  # We'll regenerate search results
+            # Check if this is a follow-up query
+            is_follow_up = await self.is_follow_up_query(messages)
+            self.update_state("follow_up_mode", is_follow_up)
 
-        else:
-            # For follow-up queries, we need to generate a new research outline based on the previous summary
+            # Get summary embedding if this is a follow-up
+            summary_embedding = None
             if is_follow_up:
-                outline_embedding = await self.get_embedding(
-                    user_message
-                )  # Create initial placeholder
-                # Step 1: Generate initial search queries for follow-up considering previous summary
-                await self.emit_status(
-                    "info", "Generating initial search queries for follow-up...", False
-                )
-
-                initial_query_prompt = {
-                    "role": "system",
-                    "content": """You are a post-grad research assistant generating effective search queries for continued research based on an existing report.
-    Based on the user's follow-up question and the previous research summary, generate 6 initial search queries.
-    Each query should be specific, use relevant keywords, and be designed to find new information that builds on the previous research towards the new query.
-    Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
-    
-    Format your response as a valid JSON object with the following structure:
-    {"queries": [
-      "search query 1", 
-      "search query 2",
-      "search query 3"
-    ]}""",
-                }
-
-                initial_query_messages = [
-                    initial_query_prompt,
-                    {
-                        "role": "user",
-                        "content": f"Follow-up question: {user_message}\n\nPrevious research summary:\n{state.get('prev_comprehensive_summary', '')}...\n\nGenerate initial search queries for the follow-up question that build on the previous research.",
-                    },
-                ]
-
-                # Get initial search queries
-                query_response = await self.generate_completion(
-                    self.get_research_model(),
-                    initial_query_messages,
-                    temperature=self.valves.TEMPERATURE,
-                )
-                query_content = query_response["choices"][0]["message"]["content"]
-
-                # Extract JSON from response
-                try:
-                    query_json_str = query_content[
-                        query_content.find("{") : query_content.rfind("}") + 1
-                    ]
-                    query_data = json.loads(query_json_str)
-                    initial_queries = query_data.get("queries", [])
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.error(f"Error parsing query JSON: {e}")
-                    # Fallback: extract queries using regex if JSON parsing fails
-                    import re
-
-                    initial_queries = re.findall(r'"([^"]+)"', query_content)[:3]
-                    if not initial_queries:
-                        initial_queries = ["Information about " + user_message]
-
-                # Display the queries to the user
-                research_outline = []
-                try:
-                    import time
-                    start_time = time.time()
-                    logger.info("Starting two-pass outline generation.")
-
-                    # == PASS 1: Generate outline in Markdown format ==
-                    # ...existing code for Pass 1...
-                    logger.info("Calling LLM for Pass 1 (Markdown outline)...")
-                    markdown_outline_response = await self.generate_completion(...)
-                    markdown_outline = markdown_outline_response["choices"]["message"]["content"]
-                    if not markdown_outline.strip():
-                        raise ValueError("LLM failed to generate Markdown outline in Pass 1.")
-                    logger.info("Pass 1 (Markdown) successful.")
-
-                    # == PASS 2: Convert Markdown outline to JSON (First Attempt) ==
-                    # ...existing code for Pass 2 prompt...
-                    logger.info("Calling LLM for Pass 2 (JSON conversion)...")
-                    json_outline_response = await self.generate_completion(...)
-                    json_outline_content = json_outline_response["choices"]["message"]["content"]
-
-                    try:
-                        # 1. First attempt to parse JSON
-                        logger.info("Attempting to parse JSON from Pass 2...")
-                        json_start = json_outline_content.find("{")
-                        json_end = json_outline_content.rfind("}") + 1
-                        if json_start != -1 and json_end > json_start:
-                            outline_json_str = json_outline_content[json_start:json_end]
-                            logger.info(f"Extracted JSON string for parsing: {outline_json_str[:200]}...")
-                            # Use our robust JSON parsing method
-                            research_outline, all_topics_temp = await self.parse_json_with_fallback(outline_json_str, user_message)
-                        else:
-                            raise ValueError("No valid JSON object found in the initial LLM response.")
-
-                    except json.JSONDecodeError as json_err:
-                        # 2. If first parse fails, start JSON repair retry
-                        logger.warning(f"Initial JSON parsing failed: {json_err}. Attempting self-repair.")
-                        await self.emit_status("info", "Initial outline format was invalid, attempting self-repair...", False)
-
-                        # Prepare repair prompt
-                        repair_prompt = {
-                            "role": "system",
-                            "content": "You are a JSON repair expert. Your task is to fix a broken JSON string. You must output ONLY the raw, corrected, and valid JSON object. Do not add any other text, preambles, or explanations."
-                        }
-                        repair_message = {
-                            "role": "user",
-                            "content": f"The following JSON string is broken and could not be parsed. The error was: '{json_err}'.\n\nPlease fix it.\n\nBroken JSON:\n---\n{json_outline_content}\n---"
-                        }
-
-                        # 3. Call LLM for repair
-                        logger.info("Calling LLM for JSON repair...")
-                        repaired_response = await self.generate_completion(
-                            self.get_research_model(),
-                            [repair_prompt, repair_message],
-                            json_mode=True,
-                            temperature=0.0
-                        )
-                        repaired_json_content = repaired_response["choices"]["message"]["content"]
-
-                        # 4. Second (final) attempt to parse
-                        logger.info("Attempting to parse the repaired JSON...")
-                        repaired_start = repaired_json_content.find("{")
-                        repaired_end = repaired_json_content.rfind("}") + 1
-                        if repaired_start != -1 and repaired_end > repaired_start:
-                            repaired_json_str = repaired_json_content[repaired_start:repaired_end]
-                            # Use our robust JSON parsing method
-                            research_outline, all_topics_temp = await self.parse_json_with_fallback(repaired_json_str, user_message)
-                        else:
-                            raise ValueError("JSON repair failed, no object found.")
-                        logger.info("JSON self-repair successful!")
-
-                    if not research_outline:
-                        raise ValueError("LLM returned an empty or invalid outline after all attempts.")
-
-                    logger.info("Outline generation successful.")
-                    end_time = time.time()
-                    logger.info(f"Outline generation took {end_time - start_time:.2f} seconds.")
-
-                except Exception as e:
-                    # Final fallback logic
-                    logger.error(f"FATAL: An error occurred during outline generation: {e}", exc_info=True)
-                    await self.emit_status("error", f"Failed to generate outline: {e}", True)
-                    await self.emit_message("*Failed to generate a detailed research outline. Proceeding with a basic structure.*")
-                    research_outline = [
-                        {"topic": f"Key Aspects of {user_message}", "subtopics": ["Background and History", "Core Technologies", "Impact and Applications"]},
-                        {"topic": "Related Concepts", "subtopics": ["Comparative Analysis", "Future Trends"]},
-                    ]
-                outline_context += (
-                    f"{state.get('prev_comprehensive_summary', '')}...\n\n"
-                )
-
-                outline_context += "### New Search Results:\n\n"
-                for i, result in enumerate(initial_results):
-                    outline_context += f"Result {i+1} (Query: '{result['query']}')\n"
-                    outline_context += f"Title: {result['title']}\n"
-                    outline_context += f"Content: {result['content']}...\n\n"
-
-                outline_messages = [
-                    outline_prompt,
-                    {
-                        "role": "user",
-                        "content": f"Follow-up question: {user_message}\n\n{outline_context}\n\nGenerate a comprehensive research outline that builds on previous research while addressing the follow-up question.",
-                    },
-                ]
-
-                # Generate the research outline
-                outline_response = await self.generate_completion(
-                    self.get_research_model(), 
-                    outline_messages,
-                    json_mode=True # Request JSON output
-                )
-                
-                # --- FIX STARTS HERE ---
-                outline_content = ""
-                # Check if the response and choices are valid before accessing them
-                if outline_response and outline_response.get("choices") and len(outline_response["choices"]) > 0:
-                    message = outline_response["choices"][0].get("message")
-                    if message:
-                        outline_content = message.get("content", "")
-                # --- FIX ENDS HERE ---
-
-                # Extract JSON from response
-                try:
-                    # The content should already be a clean JSON string if json_mode worked
-                    # Use our robust JSON parsing method
-                    research_outline, all_topics_temp = await self.parse_json_with_fallback(outline_content, user_message)
-
-                    # Add a check to ensure the outline is not empty
-                    if not research_outline:
-                        raise ValueError("LLM returned an empty outline.")
-
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.error(f"Error parsing outline JSON: {e}. Content was: '{outline_content}'")
-                    # Fallback: create a simple outline if JSON parsing fails
-                    research_outline = [
-                        {
-                            "topic": "General Information",
-                            "subtopics": ["Background", "Key Concepts"],
-                        },
-                        {
-                            "topic": "Specific Aspects",
-                            "subtopics": ["Detailed Analysis", "Examples"],
-                        },
-                    ]
-
-                # Create a flat list of all topics for tracking
-                all_topics = []
-                for topic_item in research_outline:
-                    all_topics.append(topic_item["topic"])
-                    all_topics.extend(topic_item.get("subtopics", []))
-
-                # Create outline embedding
-                outline_text = " ".join(all_topics)
-                outline_embedding = await self.get_embedding(outline_text)
-
-                # Initialize research dimensions
-                await self.initialize_research_dimensions(all_topics, user_message)
-
-                # Display the outline to the user
-                outline_text = "### Research Outline for Follow-up\n\n"
-                for topic in research_outline:
-                    outline_text += f"**{topic['topic']}**\n"
-                    for subtopic in topic.get("subtopics", []):
-                        outline_text += f"- {subtopic}\n"
-                    outline_text += "\n"
-
-                await self.emit_message(outline_text)
-                await self.emit_message(
-                    "\n*Continuing with research based on this outline and previous findings...*\n\n"
-                )
-
-            else:
-                # Regular new query - generate initial search queries
-                await self.emit_status(
-                    "info", "Generating initial search queries...", False
-                )
-
-                initial_query_prompt = {
-                    "role": "system",
-                    "content": f"""You are a post-grad research assistant generating effective search queries.
-    The user has submitted a research query: "{user_message}".
-    Based on the user's input, generate 8 initial search queries to begin research and help us delineate the research topic.
-    Half of the queries should be broad, aimed at identifying and defining the main topic and returning core characteristic information about it.
-    The other half should be more specific, designed to find information to help expand on known base details of the user's query.
-    Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
-    
-    Format your response as a valid JSON object with the following structure:
-    {{"queries": [
-      "search query 1", 
-      "search query 2",
-      "search query 3..."
-    ]}}""",
-                }
-
-                initial_query_messages = [
-                    initial_query_prompt,
-                    {
-                        "role": "user",
-                        "content": f"Generate initial search queries for this user query: {user_message}",
-                    },
-                ]
-
-                # Get initial search queries
-                query_response = await self.generate_completion(
-                    self.get_research_model(),
-                    initial_query_messages,
-                    temperature=self.valves.TEMPERATURE,
-                )
-                query_content = query_response["choices"][0]["message"]["content"]
-
-                # Extract JSON from response
-                try:
-                    query_json_str = query_content[
-                        query_content.find("{") : query_content.rfind("}") + 1
-                    ]
-                    query_data = json.loads(query_json_str)
-                    initial_queries = query_data.get("queries", [])
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.error(f"Error parsing query JSON: {e}")
-                    # Fallback: extract queries using regex if JSON parsing fails
-                    import re
-
-                    initial_queries = re.findall(r'"([^"]+)"', query_content)[:3]
-                    if not initial_queries:
-                        initial_queries = ["Information about " + user_message]
-
-                # Display the queries to the user
-                await self.emit_message(f"### Initial Research Queries\n\n")
-                for i, query in enumerate(initial_queries):
-                    await self.emit_message(f"**Query {i+1}**: {query}\n\n")
-
-                # Step 2: Execute initial searches and collect results
-                # Get outline embedding (placeholder - will be updated after outline is created)
-                outline_embedding = await self.get_embedding(user_message)
-
-                initial_results = []
-                for query in initial_queries:
-                    # Get query embedding for content comparison
+                prev_comprehensive_summary = state.get("prev_comprehensive_summary", "")
+                if prev_comprehensive_summary:
                     try:
                         await self.emit_status(
-                            "info", f"Getting embedding for query: {query}", False
+                            "info", "Processing follow-up query...", False
                         )
-                        query_embedding = await self.get_embedding(query)
-                        if not query_embedding:
-                            # If we can't get an embedding from the model, create a default one
-                            logger.warning(
-                                f"Failed to get embedding for '{query}', using default"
-                            )
-                            query_embedding = [0] * 384  # Default embedding size
+                        summary_embedding = await self.get_embedding(
+                            prev_comprehensive_summary
+                        )
+                        await self.emit_message("## Deep Research Mode: Follow-up\n\n")
+                        await self.emit_message(
+                            "I'll continue researching based on your follow-up query while considering our previous findings.\n\n"
+                        )
                     except Exception as e:
-                        logger.error(f"Error getting embedding: {e}")
-                        query_embedding = [0] * 384  # Default embedding size
+                        logger.error(f"Error getting summary embedding: {e}")
+                        # Continue without the summary embedding if there's an error
+                        is_follow_up = False
+                        self.update_state("follow_up_mode", False)
+                        await self.emit_message("## Deep Research Mode: Activated\n\n")
+                        await self.emit_message(
+                            "I'll search for comprehensive information about your query. This might take a moment...\n\n"
+                        )
+                else:
+                    is_follow_up = False
+                    self.update_state("follow_up_mode", False)
+            else:
+                await self.emit_status("info", "Starting deep research...", False)
+                await self.emit_message("## Deep Research Mode: Activated\n\n")
+                await self.emit_message(
+                    "I'll search for comprehensive information about your query. This might take a moment...\n\n"
+                )
+        else:
+            logger.debug("★★★ SKIPPING INITIAL SETUP - PROCEEDING DIRECTLY TO RESEARCH CYCLES ★★★")
+            logger.debug(f"★★★ skip_initial_setup = {skip_initial_setup} ★★★")
+            # Set default values for skipped setup
+            is_follow_up = False
+            summary_embedding = None
+            logger.debug("★★★ SET DEFAULT VALUES FOR SKIPPED SETUP ★★★")
 
-                    # Process the query and get results
-                    results = await self.process_query(
-                        query,
-                        query_embedding,
-                        outline_embedding,
-                        None,
-                        summary_embedding,
+        # ★★★ CRITICAL FIX: Skip initial setup if we just processed feedback ★★★
+        if skip_initial_setup:
+            logger.debug("★★★ USING RESEARCH STATE FROM FEEDBACK PROCESSING ★★★")
+            logger.debug(f"★★★ skip_initial_setup = {skip_initial_setup} ★★★")
+            # We already have the research state from feedback processing
+            # Just set initial_results to empty since we'll regenerate search results
+            initial_results = []
+            logger.debug(f"★★★ SET initial_results = [] (length: {len(initial_results)}) ★★★")
+        else:
+            # Check if we have research state from previous feedback
+            research_state = state.get("research_state")
+            if research_state:
+                # Use the existing research state from feedback
+                research_outline = research_state.get("research_outline", [])
+                all_topics = research_state.get("all_topics", [])
+                outline_embedding = research_state.get("outline_embedding")
+                user_message = research_state.get("user_message", user_message)
+
+                await self.emit_status(
+                    "info", "Continuing research with updated outline...", False
+                )
+
+                # Skip to research cycles
+                initial_results = []  # We'll regenerate search results
+
+            else:
+                # For follow-up queries, we need to generate a new research outline based on the previous summary
+                if is_follow_up:
+                    outline_embedding = await self.get_embedding(
+                        user_message
+                    )  # Create initial placeholder
+                    # Step 1: Generate initial search queries for follow-up considering previous summary
+                    await self.emit_status(
+                        "info", "Generating initial search queries for follow-up...", False
                     )
 
-                    # Add successful results to our collection
-                    initial_results.extend(results)
+                    initial_query_prompt = {
+                        "role": "system",
+                        "content": """You are a post-grad research assistant generating effective search queries for continued research based on an existing report.
+        Based on the user's follow-up question and the previous research summary, generate 6 initial search queries.
+        Each query should be specific, use relevant keywords, and be designed to find new information that builds on the previous research towards the new query.
+        Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
 
-                # Check if we got any useful results
-                useful_results = [
-                    r for r in initial_results if len(r.get("content", "")) > 200
-                ]
+        Format your response as a valid JSON object with the following structure:
+        {"queries": [
+          "search query 1",
+          "search query 2",
+          "search query 3"
+        ]}""",
+                    }
 
-                # If we didn't get any useful results, create a minimal result to continue
-                if not useful_results:
-                    await self.emit_message(
-                        f"*Unable to find initial search results. Creating research outline based on the query alone.*\n\n"
-                    )
-                    initial_results = [
+                    initial_query_messages = [
+                        initial_query_prompt,
                         {
-                            "title": f"Information about {user_message}",
-                            "url": "",
-                            "content": f"This is a placeholder for research about {user_message}. The search failed to return usable results.",
-                            "query": user_message,
+                            "role": "user",
+                            "content": f"Follow-up question: {user_message}\n\nPrevious research summary:\n{state.get('prev_comprehensive_summary', '')}...\n\nGenerate initial search queries for the follow-up question that build on the previous research.",
+                        },
+                    ]
+
+                    # Get initial search queries
+                    query_response = await self.generate_completion(
+                        self.get_research_model(),
+                        initial_query_messages,
+                        temperature=self.valves.TEMPERATURE,
+                    )
+                    query_content = query_response["choices"][0]["message"]["content"]
+
+                    # Extract JSON from response
+                    try:
+                        query_json_str = query_content[
+                            query_content.find("{") : query_content.rfind("}") + 1
+                        ]
+                        query_data = json.loads(query_json_str)
+                        initial_queries = query_data.get("queries", [])
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.error(f"Error parsing query JSON: {e}")
+                        # Fallback: extract queries using regex if JSON parsing fails
+                        import re
+
+                        initial_queries = re.findall(r'"([^"]+)"', query_content)[:3]
+                        if not initial_queries:
+                            initial_queries = ["Information about " + user_message]
+
+                    # Create a simple outline for follow-up queries
+                    research_outline = [
+                        {
+                            "topic": f"Follow-up Analysis of {user_message}",
+                            "subtopics": ["Updated Information", "New Developments", "Additional Context"]
+                        },
+                        {
+                            "topic": "Extended Research",
+                            "subtopics": ["Detailed Investigation", "Related Topics", "Comparative Analysis"]
                         }
                     ]
-                else:
-                    # Log the successful results
-                    logger.info(
-                        f"Found {len(useful_results)} useful results from initial queries"
+
+                    # Display the outline to the user
+                    outline_text = "### Research Outline for Follow-up\n\n"
+                    for topic in research_outline:
+                        outline_text += f"**{topic['topic']}**\n"
+                        for subtopic in topic.get("subtopics", []):
+                            outline_text += f"- {subtopic}\n"
+                        outline_text += "\n"
+
+                    await self.emit_message(outline_text)
+                    await self.emit_message(
+                        "\n*Continuing with research based on this outline and previous findings...*\n\n"
                     )
 
-                # Step 3: Generate research outline based on user query AND initial results
-                logger.info("Preparing to generate initial research outline...")
-                await self.emit_status(
-                    "info",
-                    "Analyzing initial results and generating research outline...",
-                    False,
-                )
+                    # Create a flat list of all topics for tracking
+                    all_topics = []
+                    for topic_item in research_outline:
+                        all_topics.append(topic_item["topic"])
+                        all_topics.extend(topic_item.get("subtopics", []))
+
+                    # Create outline embedding
+                    outline_text = " ".join(all_topics)
+                    outline_embedding = await self.get_embedding(outline_text)
+
+                    # Initialize research dimensions
+                    await self.initialize_research_dimensions(all_topics, user_message)
+
+                    # Display the outline to the user
+                    outline_text = "### Research Outline for Follow-up\n\n"
+                    for topic in research_outline:
+                        outline_text += f"**{topic['topic']}**\n"
+                        for subtopic in topic.get("subtopics", []):
+                            outline_text += f"- {subtopic}\n"
+                        outline_text += "\n"
+
+                    await self.emit_message(outline_text)
+                    await self.emit_message(
+                        "\n*Continuing with research based on this outline and previous findings...*\n\n"
+                    )
+
+                else:
+                    # Regular new query - generate initial search queries
+                    await self.emit_status(
+                        "info", "Generating initial search queries...", False
+                    )
+
+                    initial_query_prompt = {
+                        "role": "system",
+                        "content": f"""You are a post-grad research assistant generating effective search queries.
+        The user has submitted a research query: "{user_message}".
+        Based on the user's input, generate 8 initial search queries to begin research and help us delineate the research topic.
+        Half of the queries should be broad, aimed at identifying and defining the main topic and returning core characteristic information about it.
+        The other half should be more specific, designed to find information to help expand on known base details of the user's query.
+        Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
+
+        Format your response as a valid JSON object with the following structure:
+        {{"queries": [
+          "search query 1",
+          "search query 2",
+          "search query 3..."
+        ]}}""",
+                    }
+
+                    initial_query_messages = [
+                        initial_query_prompt,
+                        {
+                            "role": "user",
+                            "content": f"Generate initial search queries for this user query: {user_message}",
+                        },
+                    ]
+
+                    # Get initial search queries
+                    query_response = await self.generate_completion(
+                        self.get_research_model(),
+                        initial_query_messages,
+                        temperature=self.valves.TEMPERATURE,
+                    )
+                    query_content = query_response["choices"][0]["message"]["content"]
+
+                    # Extract JSON from response
+                    try:
+                        query_json_str = query_content[
+                            query_content.find("{") : query_content.rfind("}") + 1
+                        ]
+                        query_data = json.loads(query_json_str)
+                        initial_queries = query_data.get("queries", [])
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.error(f"Error parsing query JSON: {e}")
+                        # Fallback: extract queries using regex if JSON parsing fails
+                        import re
+
+                        initial_queries = re.findall(r'"([^"]+)"', query_content)[:3]
+                        if not initial_queries:
+                            initial_queries = ["Information about " + user_message]
+
+                    # Display the queries to the user
+                    await self.emit_message(f"### Initial Research Queries\n\n")
+                    for i, query in enumerate(initial_queries):
+                        await self.emit_message(f"**Query {i+1}**: {query}\n\n")
+
+                    # Step 2: Execute initial searches and collect results
+                    # Get outline embedding (placeholder - will be updated after outline is created)
+                    outline_embedding = await self.get_embedding(user_message)
+
+                    initial_results = []
+                    for query in initial_queries:
+                        # Get query embedding for content comparison
+                        try:
+                            await self.emit_status(
+                                "info", f"Getting embedding for query: {query}", False
+                            )
+                            query_embedding = await self.get_embedding(query)
+                            if not query_embedding:
+                                # If we can't get an embedding from the model, create a default one
+                                logger.warning(
+                                    f"Failed to get embedding for '{query}', using default"
+                                )
+                                query_embedding = [0] * 384  # Default embedding size
+                        except Exception as e:
+                            logger.error(f"Error getting embedding: {e}")
+                            query_embedding = [0] * 384  # Default embedding size
+
+                        # Process the query and get results
+                        results = await self.process_query(
+                            query,
+                            query_embedding,
+                            outline_embedding,
+                            None,
+                            summary_embedding,
+                        )
+
+                        # Add successful results to our collection
+                        initial_results.extend(results)
+
+                    # Check if we got any useful results
+                    useful_results = [
+                        r for r in initial_results if len(r.get("content", "")) > 200
+                    ]
+
+                    # If we didn't get any useful results, create a minimal result to continue
+                    if not useful_results:
+                        await self.emit_message(
+                            f"*Unable to find initial search results. Creating research outline based on the query alone.*\n\n"
+                        )
+                        initial_results = [
+                            {
+                                "title": f"Information about {user_message}",
+                                "url": "",
+                                "content": f"This is a placeholder for research about {user_message}. The search failed to return usable results.",
+                                "query": user_message,
+                            }
+                        ]
+                    else:
+                        # Log the successful results
+                        logger.info(
+                            f"Found {len(useful_results)} useful results from initial queries"
+                        )
+
+                    # Step 3: Generate research outline based on user query AND initial results
+                    logger.info("Preparing to generate initial research outline...")
+                    await self.emit_status(
+                        "info",
+                        "Analyzing initial results and generating research outline...",
+                        False,
+                    )
 
                 research_outline = []
                 try:
@@ -10240,23 +10262,66 @@ Format your response as a clear, structured Markdown list. For example:
         if self.valves.INTERACTIVE_RESEARCH:
             # Get user feedback on the research outline
             if not state.get("waiting_for_outline_feedback", False):
-                # Display the outline to the user
-                outline_text = "### Research Outline\n\n"
-                for topic in research_outline:
-                    outline_text += f"**{topic['topic']}**\n"
-                    for subtopic in topic.get("subtopics", []):
-                        outline_text += f"- {subtopic}\n"
-                    outline_text += "\n"
+                logger.debug("Starting interactive research outline feedback process")
 
-                await self.emit_message(outline_text)
+                # --- START MODIFICATION: Combine outline display and feedback prompt ---
 
-                # Get user feedback (this will set the flags and state for continuation)
-                feedback_result = await self.process_user_outline_feedback(
-                    research_outline, user_message
+                # First, prepare the data needed for feedback processing
+                numbered_outline = []
+                flat_items = []
+                item_num = 1
+                for topic_item in research_outline:
+                    topic = topic_item.get("topic", "")
+                    subtopics = topic_item.get("subtopics", [])
+                    flat_items.append(topic)
+                    numbered_outline.append(f"{item_num}. {topic}")
+                    item_num += 1
+                    for subtopic in subtopics:
+                        flat_items.append(subtopic)
+                        numbered_outline.append(f"{item_num}. {subtopic}")
+                        item_num += 1
+
+                outline_display = "\n".join(numbered_outline)
+                logger.debug(f"Prepared numbered outline with {len(flat_items)} items")
+
+                # Combine the outline display and the feedback prompt into a SINGLE message
+                combined_feedback_message = (
+                    "### Research Outline\n\n"
+                    f"{outline_display}\n\n"
+                    "**Please provide feedback on this research outline.**\n\n"
+                    "You can:\n"
+                    "- Use commands like `/keep 1,3,5-7` or `/remove 2,4,8-10` to select specific items by number\n"
+                    "- Or simply describe what topics you want to focus on or avoid in natural language\n\n"
+                    "Examples:\n"
+                    "- `/k 1,3,5-7` (keep only items 1,3,5,6,7)\n"
+                    "- `/r 2,4,8-10` (remove items 2,4,8,9,10)\n"
+                    '- "Focus on historical aspects and avoid technical details"\n'
+                    '- "I\'m more interested in practical applications than theoretical concepts"\n\n'
+                    "If you want to continue with all items, just reply 'continue' or leave your message empty.\n\n"
+                    "**I'll pause here to await your response before continuing the research.**"
                 )
 
-                # Return empty string to pause execution until next message
+                logger.debug("About to emit combined feedback message")
+                # Emit the single, combined message
+                await self.emit_message(combined_feedback_message)
+                logger.debug("Combined feedback message emitted successfully")
+
+                # Set the waiting flag and store necessary data
+                self.update_state("waiting_for_outline_feedback", True)
+                self.update_state(
+                    "outline_feedback_data",
+                    {
+                        "outline_items": research_outline,
+                        "flat_items": flat_items,
+                        "numbered_outline": numbered_outline,
+                        "original_query": user_message,
+                    },
+                )
+                logger.debug("State updated for outline feedback, returning empty string to pause execution")
+
+                # Return empty string to pause execution
                 return ""
+                # --- END MODIFICATION ---
         else:
             # Regular display of outline if interactive research is disabled
             # Display the outline to the user
@@ -10292,12 +10357,16 @@ Format your response as a clear, structured Markdown list. For example:
             )
             logger.debug("★★★ CONTINUING MESSAGE EMITTED ★★★")
 
-        # Update status to show we've moved beyond outline generation
-        logger.debug("★★★ ABOUT TO UPDATE STATUS TO BEGINNING RESEARCH CYCLES ★★★")
-        await self.emit_status(
-            "info", "Research outline generated. Beginning research cycles...", False
-        )
-        logger.debug("★★★ STATUS UPDATED TO BEGINNING RESEARCH CYCLES ★★★")
+        # ★★★ CRITICAL FIX: Only update status if we're not skipping initial setup ★★★
+        if not skip_initial_setup:
+            # Update status to show we've moved beyond outline generation
+            logger.debug("★★★ ABOUT TO UPDATE STATUS TO BEGINNING RESEARCH CYCLES ★★★")
+            await self.emit_status(
+                "info", "Research outline generated. Beginning research cycles...", False
+            )
+            logger.debug("★★★ STATUS UPDATED TO BEGINNING RESEARCH CYCLES ★★★")
+        else:
+            logger.debug("★★★ SKIPPING STATUS UPDATE - ALREADY PROCESSED FEEDBACK ★★★")
 
         # Initialize research variables for continued cycles
         cycle = 1  # We've already done one cycle with the initial queries
@@ -10306,6 +10375,19 @@ Format your response as a clear, structured Markdown list. For example:
         completed_topics = set(state.get("completed_topics", set()))
         irrelevant_topics = set(state.get("irrelevant_topics", set()))
         search_history = state.get("search_history", [])
+
+        # ★★★ CRITICAL FIX: Ensure initial_results is always defined ★★★
+        try:
+            # Check if initial_results exists and has content
+            if initial_results:
+                logger.debug(f"★★★ INITIAL_RESULTS LENGTH: {len(initial_results)} ★★★")
+            else:
+                logger.debug("★★★ INITIAL_RESULTS IS EMPTY ★★★")
+        except NameError:
+            # initial_results is not defined, set it to empty list
+            initial_results = []
+            logger.debug("★★★ INITIAL_RESULTS WAS NOT DEFINED, SET TO EMPTY LIST ★★★")
+
         results_history = state.get("results_history", []) + (initial_results or [])
         active_outline = list(set(all_topics) - completed_topics - irrelevant_topics)
         cycle_summaries = state.get("cycle_summaries", [])
