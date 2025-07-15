@@ -751,10 +751,59 @@ class Pipe:
 
 
     # Add robust JSON parsing with fallback
-    async def parse_json_with_fallback(self, json_str: str, user_message: str) -> Tuple[List[dict], List[str]]:
-        """Attempts to parse JSON with retries and fallback mechanism"""
+    async def _simple_json_repair(self, json_str: str) -> Optional[str]:
+        """Attempt simple JSON repairs for common issues"""
         try:
-            outline_data = json.loads(json_str)
+            # Clean the JSON string first
+            cleaned = json_str.strip()
+
+            # Remove any trailing commas before closing brackets/braces
+            cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+
+            # Fix missing quotes around keys (simple cases)
+            cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+
+            # Fix single quotes to double quotes
+            cleaned = cleaned.replace("'", '"')
+
+            # Try to balance braces and brackets
+            open_braces = cleaned.count('{')
+            close_braces = cleaned.count('}')
+            open_brackets = cleaned.count('[')
+            close_brackets = cleaned.count(']')
+
+            # Add missing closing braces/brackets
+            if open_braces > close_braces:
+                cleaned += '}' * (open_braces - close_braces)
+            if open_brackets > close_brackets:
+                cleaned += ']' * (open_brackets - close_brackets)
+
+            # Test if the repair worked
+            json.loads(cleaned)
+            return cleaned
+
+        except Exception:
+            return None
+
+    async def parse_json_with_fallback(self, json_str: str, user_message: str, retry_count: int = 0) -> Tuple[List[dict], List[str]]:
+        """Attempts to parse JSON with retries and fallback mechanism"""
+        # Clean the JSON string first
+        cleaned_json = json_str.strip()
+
+        # Try to extract JSON from markdown code blocks if present
+        if "```json" in cleaned_json:
+            start = cleaned_json.find("```json") + 7
+            end = cleaned_json.find("```", start)
+            if end != -1:
+                cleaned_json = cleaned_json[start:end].strip()
+        elif "```" in cleaned_json:
+            start = cleaned_json.find("```") + 3
+            end = cleaned_json.find("```", start)
+            if end != -1:
+                cleaned_json = cleaned_json[start:end].strip()
+
+        try:
+            outline_data = json.loads(cleaned_json)
             research_outline = outline_data.get("outline", [])
             # Validate outline structure
             if not research_outline or not isinstance(research_outline, list):
@@ -766,16 +815,34 @@ class Pipe:
             logger.info(f"Successfully flattened outline into {len(all_topics)} topics")
             return research_outline, all_topics
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Initial JSON parse failed: {e}. Attempting repair...")
+            logger.warning(f"JSON parse failed (attempt {retry_count + 1}): {e}")
+
+            # Prevent infinite recursion
+            if retry_count >= 2:
+                logger.error("Maximum retry attempts reached, using fallback outline")
+                await self.emit_user_message(
+                    "I encountered an issue with the outline structure, but don't worry!\n"
+                    "I'll use a reliable alternative structure to continue the research.\n"
+                    "Your research process will continue smoothly.",
+                    "warning"
+                )
+                return await self.create_fallback_outline(user_message)
+
             await self.emit_user_message(
                 "The research outline structure needs some adjustments.\nI'll fix this automatically.\n",
                 "info"
             )
+
             try:
-                # Try to repair and reparse the JSON
+                # Try simple JSON repair first
+                repaired_json = await self._simple_json_repair(cleaned_json)
+                if repaired_json:
+                    return await self.parse_json_with_fallback(repaired_json, user_message, retry_count + 1)
+
+                # If simple repair fails, try LLM repair
                 repair_messages = [
-                    {"role": "system", "content": "You are a JSON repair specialist. Fix the JSON structure while preserving content."},
-                    {"role": "user", "content": f"Fix this JSON. Return only valid JSON:\n{json_str}"}
+                    {"role": "system", "content": "You are a JSON repair specialist. Fix the JSON structure while preserving content. Return ONLY valid JSON, no explanations."},
+                    {"role": "user", "content": f"Fix this broken JSON and return only the corrected JSON:\n{cleaned_json[:1000]}"}  # Limit length
                 ]
                 repair_response = await generate_chat_completions(
                     messages=repair_messages,
@@ -783,24 +850,21 @@ class Pipe:
                 )
                 if not repair_response or "choices" not in repair_response:
                     raise ValueError("Failed to get repair response")
-                repaired_json_str = repair_response["choices"][0]["message"]["content"]
-                # Inform user about repair attempt
-                await self.emit_user_message(
-                    "Attempting to repair the outline structure...\n",
-                    "info"
-                )
-                # Try parsing the repaired JSON
-                return await self.parse_json_with_fallback(repaired_json_str, user_message)
+
+                repaired_json_str = repair_response["choices"][0]["message"]["content"].strip()
+
+                # Try parsing the repaired JSON (with incremented retry count)
+                return await self.parse_json_with_fallback(repaired_json_str, user_message, retry_count + 1)
+
             except Exception as repair_err:
                 logger.error(f"JSON repair failed: {repair_err}", exc_info=True)
-                # Send a reassuring message to the user
+                # Use the fallback outline when repair fails
                 await self.emit_user_message(
                     "I encountered an issue with the outline structure, but don't worry!\n"
                     "I'll use a reliable alternative structure to continue the research.\n"
                     "Your research process will continue smoothly.",
                     "warning"
                 )
-                # Use the fallback outline when all else fails
                 return await self.create_fallback_outline(user_message)
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
@@ -1282,7 +1346,7 @@ class Pipe:
 
         # Generate a unique ID for this transformation
         state = self.get_state()
-        transformation_id = f"transform_{hash(str(pdv))[:8]}_{hash(str(trajectory))[:8]}_{hash(str(gap_vector))[:8]}"
+        transformation_id = f"transform_{str(hash(str(pdv)))[:8]}_{str(hash(str(trajectory)))[:8]}_{str(hash(str(gap_vector)))[:8]}"
 
         try:
             # Get principal components
@@ -9658,8 +9722,8 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                         if json_start != -1 and json_end > json_start:
                             outline_json_str = json_outline_content[json_start:json_end]
                             logger.info(f"Extracted JSON string for parsing: {outline_json_str[:200]}...")
-                            outline_data = json.loads(outline_json_str)
-                            research_outline = outline_data.get("outline", [])
+                            # Use our robust JSON parsing method
+                            research_outline, all_topics_temp = await self.parse_json_with_fallback(outline_json_str, user_message)
                         else:
                             raise ValueError("No valid JSON object found in the initial LLM response.")
 
@@ -9694,8 +9758,8 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                         repaired_end = repaired_json_content.rfind("}") + 1
                         if repaired_start != -1 and repaired_end > repaired_start:
                             repaired_json_str = repaired_json_content[repaired_start:repaired_end]
-                            outline_data = json.loads(repaired_json_str)
-                            research_outline = outline_data.get("outline", [])
+                            # Use our robust JSON parsing method
+                            research_outline, all_topics_temp = await self.parse_json_with_fallback(repaired_json_str, user_message)
                         else:
                             raise ValueError("JSON repair failed, no object found.")
                         logger.info("JSON self-repair successful!")
@@ -9753,8 +9817,8 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                 # Extract JSON from response
                 try:
                     # The content should already be a clean JSON string if json_mode worked
-                    outline_data = json.loads(outline_content)
-                    research_outline = outline_data.get("outline", [])
+                    # Use our robust JSON parsing method
+                    research_outline, all_topics_temp = await self.parse_json_with_fallback(outline_content, user_message)
 
                     # Add a check to ensure the outline is not empty
                     if not research_outline:
@@ -10024,8 +10088,8 @@ Format your response as a clear, structured Markdown list. For example:
                     if json_start != -1 and json_end > json_start:
                         outline_json_str = json_outline_content[json_start:json_end]
                         logger.info(f"Extracted JSON string for parsing: {outline_json_str[:200]}...")
-                        outline_data = json.loads(outline_json_str)
-                        research_outline = outline_data.get("outline", [])
+                        # Use our robust JSON parsing method
+                        research_outline, all_topics_temp = await self.parse_json_with_fallback(outline_json_str, user_message)
                     else:
                         raise ValueError("No valid JSON object found in the LLM response for Pass 2.")
                     # --- 修复结束 ---
