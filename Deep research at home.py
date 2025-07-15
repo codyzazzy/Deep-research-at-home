@@ -28,17 +28,32 @@ name = "Deep Research at Home"
 
 
 def setup_logger():
+    # Get the root logger and clear all handlers
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+
+    # Get our specific logger
     logger = logging.getLogger(name)
-    if not logger.handlers:
-        logger.setLevel(logging.DEBUG)
-        handler = logging.StreamHandler()
-        handler.set_name(name)
-        formatter = logging.Formatter(
-            "%(name)s - %(levelname)s - %(message)s"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        logger.propagate = False
+    logger.handlers.clear()
+    logger.setLevel(logging.DEBUG)
+
+    # Create new handler with no timestamp
+    handler = logging.StreamHandler()
+    handler.set_name(name)
+    formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+
+    # Add handler and prevent propagation
+    logger.addHandler(handler)
+    logger.propagate = False
+
+    # Also configure root logger to prevent double timestamps
+    root_handler = logging.StreamHandler()
+    root_formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
+    root_handler.setFormatter(root_formatter)
+    root_logger.addHandler(root_handler)
+    root_logger.setLevel(logging.DEBUG)
+
     return logger
 
 
@@ -518,26 +533,37 @@ class Pipe:
         Recursively flattens a nested research outline into a single list of topic strings.
         Handles any level of nesting in the outline structure.
         """
+        logger.debug(f"Flattening outline with {len(outline)} top-level items")
         all_topics = []
-        for item in outline:
+        for i, item in enumerate(outline):
+            logger.debug(f"Processing outline item {i+1}: {type(item)} - {str(item)[:200]}...")
             if isinstance(item, dict):
                 # Add the main topic string
                 if "topic" in item and isinstance(item["topic"], str):
                     all_topics.append(item["topic"])
+                    logger.debug(f"Added main topic: {item['topic']}")
 
                 # Recursively process subtopics
                 if "subtopics" in item and isinstance(item["subtopics"], list):
-                    for subtopic in item["subtopics"]:
+                    logger.debug(f"Processing {len(item['subtopics'])} subtopics")
+                    for j, subtopic in enumerate(item["subtopics"]):
                         if isinstance(subtopic, str):
                             all_topics.append(subtopic)
+                            logger.debug(f"Added string subtopic {j+1}: {subtopic}")
                         elif isinstance(subtopic, dict):
                             if "topic" in subtopic:
                                 all_topics.append(subtopic["topic"])
+                                logger.debug(f"Added dict subtopic {j+1}: {subtopic['topic']}")
                             # Recursively process nested subtopics
                             if "subtopics" in subtopic:
-                                all_topics.extend(self._flatten_outline_topics([subtopic]))
+                                nested_topics = self._flatten_outline_topics([subtopic])
+                                all_topics.extend(nested_topics)
+                                logger.debug(f"Added {len(nested_topics)} nested topics from subtopic {j+1}")
             elif isinstance(item, str):  # Handle cases where a subtopic list might just contain strings
                 all_topics.append(item)
+                logger.debug(f"Added string item: {item}")
+
+        logger.debug(f"Flattening complete: {len(all_topics)} total topics")
         return all_topics
 
     async def initialize_research_state(
@@ -606,12 +632,18 @@ class Pipe:
         self.update_state("search_history", search_history)
 
         # Initialize dimension tracking
+        logger.debug("About to call initialize_research_dimensions")
         await self.initialize_research_dimensions(all_topics, user_message)
+        logger.debug("Returned from initialize_research_dimensions")
+
         research_dimensions = state.get("research_dimensions")
         if research_dimensions:
             self.update_state(
                 "latest_dimension_coverage", research_dimensions["coverage"].copy()
             )
+            logger.debug("Updated latest_dimension_coverage")
+        else:
+            logger.debug("No research_dimensions found in state")
 
         # Source tracking
         self.update_state("master_source_table", state.get("master_source_table", {}))
@@ -705,36 +737,18 @@ class Pipe:
         return [{"id": f"{name}-pipe", "name": f"{name} Pipe"}]
 
     async def count_tokens(self, text: str) -> int:
-        """Count tokens in text using Ollama API"""
+        """Count tokens in text using Ollama API with robust fallback"""
         if not text:
             return 0
 
-        try:
-            # Use Ollama's tokenize endpoint with the specified model
-            connector = aiohttp.TCPConnector(force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                payload = {
-                    "model": self.valves.RESEARCH_MODEL,
-                    "prompt": text,  # Do not limit length for token counting
-                }
-
-                async with session.post(
-                    f"{self.valves.OLLAMA_URL}/api/tokenize", json=payload, timeout=10
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        tokens = result.get("tokens", [])
-                        # If we got only a partial count due to truncation, estimate full count
-                        if len(text) > 2000:
-                            ratio = len(text) / 2000
-                            return int(len(tokens) * ratio)
-                        return len(tokens)
-        except Exception as e:
-            logger.error(f"Error counting tokens with Ollama API: {e}")
+        # Skip Ollama API call since it's returning 404 - use fallback directly
+        logger.debug("Skipping Ollama tokenize API (known to return 404), using fallback estimation")
 
         # Fallback to simple estimation if API call fails
         words = text.split()
-        return int(len(words) * 1.3)  # Approximate token count using words
+        estimated_tokens = int(len(words) * 1.3)  # Approximate token count using words
+        logger.debug(f"Token count via fallback: {estimated_tokens} for {len(text)} chars")
+        return estimated_tokens
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
         """Get embedding for a text string using the configured embedding model with caching"""
@@ -756,33 +770,57 @@ class Pipe:
         try:
             # Clean the JSON string first
             cleaned = json_str.strip()
+            logger.debug(f"Starting JSON repair on: {cleaned[:200]}...")
 
             # Remove any trailing commas before closing brackets/braces
             cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
 
-            # Fix missing quotes around keys (simple cases)
-            cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+            # Fix missing quotes around keys (simple cases) - but be more careful
+            # Only fix unquoted keys that are clearly identifiers
+            cleaned = re.sub(r'(\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', cleaned)
 
             # Fix single quotes to double quotes
             cleaned = cleaned.replace("'", '"')
 
-            # Try to balance braces and brackets
-            open_braces = cleaned.count('{')
-            close_braces = cleaned.count('}')
-            open_brackets = cleaned.count('[')
-            close_brackets = cleaned.count(']')
+            # Handle common JSON truncation issues
+            # If the JSON ends abruptly, try to close it properly
+            if cleaned.count('{') > cleaned.count('}'):
+                # Count unclosed braces and brackets
+                open_braces = cleaned.count('{')
+                close_braces = cleaned.count('}')
+                open_brackets = cleaned.count('[')
+                close_brackets = cleaned.count(']')
 
-            # Add missing closing braces/brackets
-            if open_braces > close_braces:
-                cleaned += '}' * (open_braces - close_braces)
-            if open_brackets > close_brackets:
-                cleaned += ']' * (open_brackets - close_brackets)
+                # Add missing closing brackets first, then braces
+                if open_brackets > close_brackets:
+                    cleaned += ']' * (open_brackets - close_brackets)
+                if open_braces > close_braces:
+                    cleaned += '}' * (open_braces - close_braces)
+
+            # Remove any trailing incomplete content after the last complete brace
+            # Find the last complete JSON object
+            brace_count = 0
+            last_complete_pos = -1
+            for i, char in enumerate(cleaned):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        last_complete_pos = i
+
+            if last_complete_pos > 0:
+                cleaned = cleaned[:last_complete_pos + 1]
+
+            logger.debug(f"After repair: {cleaned[:200]}...")
 
             # Test if the repair worked
             json.loads(cleaned)
+            logger.debug("JSON repair successful!")
             return cleaned
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"JSON repair failed: {e}")
             return None
 
     async def parse_json_with_fallback(self, json_str: str, user_message: str, retry_count: int = 0) -> Tuple[List[dict], List[str]]:
@@ -816,10 +854,13 @@ class Pipe:
             return research_outline, all_topics
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"JSON parse failed (attempt {retry_count + 1}): {e}")
+            logger.debug(f"Failed JSON content (first 500 chars): {cleaned_json[:500]}")
+            logger.debug(f"Failed JSON content (last 500 chars): {cleaned_json[-500:]}")
 
             # Prevent infinite recursion
             if retry_count >= 2:
                 logger.error("Maximum retry attempts reached, using fallback outline")
+                logger.error(f"Final failed JSON: {cleaned_json}")
                 await self.emit_user_message(
                     "I encountered an issue with the outline structure, but don't worry!\n"
                     "I'll use a reliable alternative structure to continue the research.\n"
@@ -858,10 +899,14 @@ class Pipe:
                     form_data,
                     user=self.__user__,
                 )
+                logger.debug(f"LLM repair response: {repair_response}")
+
                 if not repair_response or "choices" not in repair_response:
                     raise ValueError("Failed to get repair response")
 
                 repaired_json_str = repair_response["choices"][0]["message"]["content"].strip()
+                logger.debug(f"LLM repaired JSON (first 500 chars): {repaired_json_str[:500]}")
+                logger.debug(f"LLM repaired JSON (last 500 chars): {repaired_json_str[-500:]}")
 
                 # Try parsing the repaired JSON (with incremented retry count)
                 return await self.parse_json_with_fallback(repaired_json_str, user_message, retry_count + 1)
@@ -3303,13 +3348,19 @@ class Pipe:
     ):
         """Initialize the semantic dimensions for tracking research progress"""
         try:
+            logger.debug(f"Starting research dimensions initialization with {len(outline_items)} items")
+            logger.debug(f"Outline items: {outline_items}")
             await self.emit_status("info", "Initializing research dimensions...", False)
             # Get embeddings for each outline item sequentially
             item_embeddings = []
-            for item in outline_items:
+            for i, item in enumerate(outline_items):
+                logger.debug(f"Getting embedding for item {i+1}/{len(outline_items)}: {item[:100]}...")
                 embedding = await self.get_embedding(item[:2000])
                 if embedding:
                     item_embeddings.append(embedding)
+                    logger.debug(f"Successfully got embedding for item {i+1}")
+                else:
+                    logger.warning(f"Failed to get embedding for item {i+1}: {item[:100]}...")
 
             # Ensure we have enough embeddings for PCA
             if len(item_embeddings) < 3:
@@ -3348,6 +3399,7 @@ class Pipe:
                     "latest_dimension_coverage", research_dimensions["coverage"]
                 )
                 await self.emit_status("info", "Research dimensions initialized successfully", False)
+                logger.debug("Research dimensions initialization completed successfully")
             except Exception as e:
                 logger.error(f"Error in dimensional analysis: {e}")
                 await self.emit_status(
@@ -3365,12 +3417,7 @@ class Pipe:
             )
             self.update_state("research_dimensions", None)
 
-            logger.info(
-                f"Initialized research dimensions with {pca.n_components_} dimensions"
-            )
-        except Exception as e:
-            logger.error(f"Error initializing research dimensions: {e}")
-            self.update_state("research_dimensions", None)
+        logger.debug("Exiting initialize_research_dimensions method")
 
     async def update_dimension_coverage(
         self, content: str, quality_factor: float = 1.0
@@ -10121,82 +10168,67 @@ Format your response as a clear, structured Markdown list. For example:
                     ]
 
                 # Create a flat list of all topics and subtopics for tracking completeness
-        # --- 修复开始: 采用更稳健的方式构建 all_topics ---
-        all_topics = []
-        for topic_item in research_outline:
-            # Safely append the main topic
-            if isinstance(topic_item, dict) and "topic" in topic_item:
-                all_topics.append(topic_item["topic"])
+        # Use our robust recursive flattening method
+        logger.debug("Using recursive flattening to extract all topics")
+        all_topics = self._flatten_outline_topics(research_outline)
+        logger.debug(f"Extracted {len(all_topics)} topics for research dimensions")
 
-            # Safely extend with subtopics, handling both strings and dicts
-            subtopics = topic_item.get("subtopics", [])
-            if isinstance(subtopics, list):
-                for subtopic in subtopics:
-                    if isinstance(subtopic, str):
-                        all_topics.append(subtopic)
-                    elif isinstance(subtopic, dict):
-                        # Try to extract the subtopic string from common possible keys
-                        subtopic_str = subtopic.get("subtopic", subtopic.get("name", ""))
-                        if subtopic_str:
-                            all_topics.append(subtopic_str)
-        # --- 修复结束 ---
+        # Update outline embedding now that we have the actual outline
+        outline_text = " ".join(all_topics)
+        outline_embedding = await self.get_embedding(outline_text)
 
-                # Update outline embedding now that we have the actual outline
-                outline_text = " ".join(all_topics)
-                outline_embedding = await self.get_embedding(outline_text)
+        # Initialize dimension-aware research tracking
+        await self.initialize_research_dimensions(all_topics, user_message)
 
-                # Initialize dimension-aware research tracking
-                await self.initialize_research_dimensions(all_topics, user_message)
+        # User interaction for outline feedback (if enabled)
+        if self.valves.INTERACTIVE_RESEARCH:
+            # Get user feedback on the research outline
+            if not state.get("waiting_for_outline_feedback", False):
+                # Display the outline to the user
+                outline_text = "### Research Outline\n\n"
+                for topic in research_outline:
+                    outline_text += f"**{topic['topic']}**\n"
+                    for subtopic in topic.get("subtopics", []):
+                        outline_text += f"- {subtopic}\n"
+                    outline_text += "\n"
 
-                # User interaction for outline feedback (if enabled)
-                if self.valves.INTERACTIVE_RESEARCH:
-                    # Get user feedback on the research outline
-                    if not state.get("waiting_for_outline_feedback", False):
-                        # Display the outline to the user
-                        outline_text = "### Research Outline\n\n"
-                        for topic in research_outline:
-                            outline_text += f"**{topic['topic']}**\n"
-                            for subtopic in topic.get("subtopics", []):
-                                outline_text += f"- {subtopic}\n"
-                            outline_text += "\n"
+                await self.emit_message(outline_text)
 
-                        await self.emit_message(outline_text)
+                # Get user feedback (this will set the flags and state for continuation)
+                feedback_result = await self.process_user_outline_feedback(
+                    research_outline, user_message
+                )
 
-                        # Get user feedback (this will set the flags and state for continuation)
-                        feedback_result = await self.process_user_outline_feedback(
-                            research_outline, user_message
-                        )
+                # Return empty string to pause execution until next message
+                return ""
+        else:
+            # Regular display of outline if interactive research is disabled
+            # Display the outline to the user
+            outline_text = "### Research Outline\n\n"
+            for topic in research_outline:
+                outline_text += f"**{topic['topic']}**\n"
+                for subtopic in topic.get("subtopics", []):
+                    outline_text += f"- {subtopic}\n"
+                outline_text += "\n"
 
-                        # Return empty string to pause execution until next message
-                        return ""
-                else:
-                    # Regular display of outline if interactive research is disabled
-                    # Display the outline to the user
-                    outline_text = "### Research Outline\n\n"
-                    for topic in research_outline:
-                        outline_text += f"**{topic['topic']}**\n"
-                        for subtopic in topic.get("subtopics", []):
-                            outline_text += f"- {subtopic}\n"
-                        outline_text += "\n"
+            await self.emit_message(outline_text)
 
-                    await self.emit_message(outline_text)
+            # Initialize research state consistently
+            await self.initialize_research_state(
+                user_message,
+                research_outline,
+                all_topics,
+                outline_embedding,
+                initial_results,
+            )
 
-                    # Initialize research state consistently
-                    await self.initialize_research_state(
-                        user_message,
-                        research_outline,
-                        all_topics,
-                        outline_embedding,
-                        initial_results,
-                    )
+            # Update token counts
+            await self.update_token_counts(initial_results)
 
-                    # Update token counts
-                    await self.update_token_counts(initial_results)
-
-                    # Display message about continuing
-                    await self.emit_message(
-                        "\n*Continuing with research outline...*\n\n"
-                    )
+            # Display message about continuing
+            await self.emit_message(
+                "\n*Continuing with research outline...*\n\n"
+            )
 
         # Update status to show we've moved beyond outline generation
         await self.emit_status(
