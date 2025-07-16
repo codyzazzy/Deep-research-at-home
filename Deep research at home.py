@@ -9064,7 +9064,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
         # Build the markdown string with English text inside a collapsible details tag
         markdown_string = f"\n<details>\n"
-        markdown_string += f"<summary><strong>Detailed Research Data (Click to expand)</strong></summary>\n\n"
+        markdown_string += f"<summary>Detailed Research Data (Click to expand)</summary>\n\n"
         markdown_string += f"#### Research Export Details\n"
         markdown_string += (
             f"- **Export Timestamp**: {export_data['export_timestamp']}\n"
