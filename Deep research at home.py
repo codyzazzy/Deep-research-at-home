@@ -1,6 +1,6 @@
-# UPDATED MAY 7, 2025
-# Added archive.org integration as a fallback for 403/271 errors :)
-# Also added functionality to prioritize certain domains and content
+# UPDATED July 20, 2025
+# Fixed buntch of bugs that leads to freezez anc backend crash
+# Also added 
 # More info on github: https://github.com/atineiatte/deep-research-at-home
 # Make sure you use my gemma3 system prompt too
 
@@ -1524,7 +1524,12 @@ class Pipe:
             eigenvalues = np.array(semantic_eigendecomposition["eigenvalues"])
 
             # Create initial transformation (identity)
-            embedding_dim = eigenvectors.shape[0]
+            if eigenvectors.ndim != 2:
+                logger.error(
+                    f"Eigenvectors array is not 2D: shape is {eigenvectors.shape}"
+                )
+                return None
+            embedding_dim = eigenvectors.shape[1]
             transformation = np.eye(embedding_dim)
 
             # Get importance weights for each eigenvector
@@ -1532,7 +1537,7 @@ class Pipe:
 
             # Enhance dimensions based on eigenvalues (semantic importance)
             for i, importance in enumerate(variance_importance):
-                eigenvector = eigenvectors[:, i]
+                eigenvector = eigenvectors[i]
                 # Scale amplification by dimension importance
                 amplification = 1.0 + importance * 2.0  # 1.0 to 3.0
                 # Add outer product to emphasize this dimension
@@ -1993,6 +1998,7 @@ class Pipe:
                     # If no previous line, handle differently
                     for j in range(min(2, len(short_line_group))):
                         merged_lines.append(short_line_group[j])
+
 
                     # Add appropriate removal note
                     if has_mixed_case:
@@ -3992,6 +3998,7 @@ class Pipe:
             ]
 
             # Filter out empty or very short ones
+
             search_terms = [term for term in search_terms if len(term.strip()) > 3]
 
             # Choose a referrer and term - use hash of domain for consistency while still appearing varied
@@ -5745,82 +5752,82 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                     # Add to successful results
                     successful_results.append(processed_result)
 
-                    # Get the document title for display
-                    document_title = processed_result["title"]
-                    if document_title == f"'{query}'" and processed_result["url"]:
-                        # Try to get a better title from the URL
-                        from urllib.parse import urlparse
+                    # # Get the document title for display
+                    # document_title = processed_result["title"]
+                    # if document_title == f"'{query}'" and processed_result["url"]:
+                    #     # Try to get a better title from the URL
+                    #     from urllib.parse import urlparse
 
-                        parsed_url = urlparse(processed_result["url"])
-                        path_parts = parsed_url.path.split("/")
-                        if path_parts[-1]:
-                            file_name = path_parts[-1]
-                            # Clean up filename to use as title
-                            if file_name.endswith(".pdf"):
-                                document_title = (
-                                    file_name[:-4].replace("-", " ").replace("_", " ")
-                                )
-                            elif "." in file_name:
-                                document_title = (
-                                    file_name.split(".")[0]
-                                    .replace("-", " ")
-                                    .replace("_", " ")
-                                )
-                            else:
-                                document_title = file_name.replace("-", " ").replace(
-                                    "_", " "
-                                )
-                        else:
-                            # Use domain as title if no useful path
-                            document_title = parsed_url.netloc
+                    #     parsed_url = urlparse(processed_result["url"])
+                    #     path_parts = parsed_url.path.split("/")
+                    #     if path_parts[-1]:
+                    #         file_name = path_parts[-1]
+                    #         # Clean up filename to use as title
+                    #         if file_name.endswith(".pdf"):
+                    #             document_title = (
+                    #                 file_name[:-4].replace("-", " ").replace("_", " ")
+                    #             )
+                    #         elif "." in file_name:
+                    #             document_title = (
+                    #                 file_name.split(".")[0]
+                    #                 .replace("-", " ")
+                    #                 .replace("_", " ")
+                    #             )
+                    #         else:
+                    #             document_title = file_name.replace("-", " ").replace(
+                    #                 "_", " "
+                    #             )
+                    #     else:
+                    #         # Use domain as title if no useful path
+                    #         document_title = parsed_url.netloc
 
-                    # Get token count for displaying
-                    token_count = processed_result.get("tokens", 0)
-                    if token_count == 0:
-                        token_count = await self.count_tokens(
-                            processed_result["content"]
-                        )
+                    # # Get token count for displaying
+                    # token_count = processed_result.get("tokens", 0)
+                    # if token_count == 0:
+                    #     token_count = await self.count_tokens(
+                    #         processed_result["content"]
+                    #     )
 
-                    # Display the result to the user with improved formatting
-                    if processed_result["url"]:
-                        # Show full URL in the result header
-                        url = processed_result["url"]
+                    # # Display the result to the user with improved formatting
+                    # if processed_result["url"]:
+                    #     # Show full URL in the result header
+                    #     url = processed_result["url"]
 
-                        # Check if this is a PDF (either by extension or by content type detection)
-                        if (
-                            url.endswith(".pdf")
-                            or "application/pdf" in url
-                            or self.is_pdf_content
-                        ):
-                            prefix = "PDF: "
-                        else:
-                            prefix = "Site: "
+                    #     # Check if this is a PDF (either by extension or by content type detection)
+                    #     if (
+                    #         url.endswith(".pdf")
+                    #         or "application/pdf" in url
+                    #         or self.is_pdf_content
+                    #     ):
+                    #         prefix = "PDF: "
+                    #     else:
+                    #         prefix = "Site: "
 
-                        result_text = (
-                            f"#### {prefix}{url}\n**Tokens:** {token_count}\n\n"
-                        )
-                    else:
-                        result_text = (
-                            f"#### {document_title} [{token_count} tokens]\n\n"
-                        )
+                    #     result_text = (
+                    #         f"#### {prefix}{url}\\n**Tokens:** {token_count}\\n\\n"
+                    #     )
+                    # else:
+                    #     result_text = (
+                    #         f"#### {document_title} [{token_count} tokens]\\n\\n"
+                    #     )
 
-                    result_text += f"*Search query: {query}*\n\n"
+                    # result_text += f"*Search query: {query}*\\n\\n"
 
-                    # Format content with short line merging
-                    content_to_display = processed_result["content"][
-                        : self.valves.MAX_RESULT_TOKENS
-                    ]
-                    formatted_content = await self.clean_text_formatting(
-                        content_to_display
-                    )
-                    result_text += f"{formatted_content}...\n\n"
+                    # # Format content with short line merging
+                    # content_to_display = processed_result["content"][
+                    #     : self.valves.MAX_RESULT_TOKENS
+                    # ]
+                    # formatted_content = await self.clean_text_formatting(
+                    #     content_to_display
+                    # )
+                    # result_text += f"{formatted_content}...\\n\\n"
 
-                    # Add repeat indicator if this is a repeated URL
-                    repeat_count = processed_result.get("repeat_count", 0)
-                    if repeat_count > 1:
-                        result_text += f"*Note: This URL has been processed {repeat_count} times*\n\n"
+                    # # Add repeat indicator if this is a repeated URL
+                    # repeat_count = processed_result.get("repeat_count", 0)
+                    # if repeat_count > 1:
+                    #     result_text += f"*Note: This URL has been processed {repeat_count} times*\\n\\n"
 
-                    await self.emit_message(result_text)
+                    # await self.emit_message(result_text)
 
                     # Reset failed count on success
                     failed_count = 0
@@ -5991,6 +5998,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                         "done": done,
                     },
                 }
+
             )
             logger.debug(f"★★★ EXITING emit_status SUCCESSFULLY: {message[:50]}... ★★★")
 
@@ -7017,7 +7025,9 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
             f"kept_items types: {[type(item) for item in kept_items[:5]]}"
         )  # Check first 5 items
         logger.debug(f"removed_items: {len(removed_items)} items")
-        logger.debug(f"all_topics: {len(all_topics)} items")  # Check first 5 items
+        logger.debug(
+            f"all_topics: {len(all_topics)} items"
+        )  # Check first 5 items
 
         # If there are no removed items, skip the replacement logic and return original outline
         if not removed_items:
@@ -7394,7 +7404,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                         new_all_topics.append(group_title)
                         new_all_topics.extend(group)
 
-                    # Update the research outline and topic list
+                # Update the research outline and topic list
                     if new_research_outline:  # Only update if we have valid content
                         research_outline = new_research_outline
                         all_topics = new_all_topics
@@ -7404,9 +7414,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                         outline_embedding = await self.get_embedding(outline_text)
 
                         # Re-initialize dimension tracking with new topics
-                        await self.initialize_research_dimensions(
-                            all_topics, user_message
-                        )
+                        await self.initialize_research_dimensions(all_topics, user_message)
 
                         # Make sure to store initial coverage for later display
                         research_dimensions = state.get("research_dimensions")
@@ -7444,22 +7452,6 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                         self.update_state(
                             "research_state",
                             {
-                                "research_outline": research_outline,
-                                "all_topics": all_topics,
-                                "outline_embedding": outline_embedding,
-                                "user_message": user_message,
-                            },
-                        )
-
-                        return research_outline, all_topics, outline_embedding
-                    else:
-                        # If we couldn't create a valid outline, continue with original
-                        await self.emit_message(
-                            "\n*No valid outline could be created. Continuing with original outline.*\n\n"
-                        )
-                        self.update_state(
-                            "research_state",
-                            {
                                 "research_outline": outline_items,
                                 "all_topics": all_topics,
                                 "outline_embedding": outline_embedding,
@@ -7484,6 +7476,21 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                     )
 
                     return outline_items, all_topics, outline_embedding
+            else:
+                # If no replacement topics could be generated, continue with the kept items.
+                await self.emit_message(
+                    "\n*Could not generate replacement topics. Continuing research with the kept outline items.*\n\n"
+                )
+                self.update_state(
+                    "research_state",
+                    {
+                        "research_outline": outline_items,
+                        "all_topics": kept_items,
+                        "outline_embedding": outline_embedding,
+                        "user_message": user_message,
+                    },
+                )
+                return outline_items, kept_items, outline_embedding
 
     async def generate_group_title(self, topics: List[str], user_message: str) -> str:
         """Generate a descriptive title for a group of related topics"""
@@ -7991,6 +7998,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         source_id = 1
 
         # Extract URLs and titles from top results, sort alphabetically by title
+
         sorted_results = sorted(top_results, key=lambda x: x.get("title", "").lower())
 
         for result in sorted_results:
@@ -9064,7 +9072,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
         # Build the markdown string with English text inside a collapsible details tag
         markdown_string = f"\n<details>\n"
-        markdown_string += f"<summary>Detailed Research Data (Click to expand)</summary>\n\n"
+        markdown_string += f"<summary>Detailed Research Data</summary>\n\n"
         markdown_string += f"#### Research Export Details\n"
         markdown_string += (
             f"- **Export Timestamp**: {export_data['export_timestamp']}\n"
@@ -10001,7 +10009,7 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                 await self.emit_message(
                     "\n*Continuing with research based on this outline and previous findings...*\n\n"
                 )
-                initial_results = []  # Start fresh for follow up
+                initial_results = [] # Start fresh for follow up
 
             else:
                 # Regular new query
@@ -10047,11 +10055,10 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.error(f"Error parsing query JSON: {e}")
                     import re
-
                     initial_queries = re.findall(r'"([^"]+)"', query_content)[:3]
                     if not initial_queries:
                         initial_queries = ["Information about " + user_message]
-
+                
                 await self.emit_message(f"### Initial Research Queries\n\n")
                 for i, query in enumerate(initial_queries):
                     await self.emit_message(f"**Query {i+1}**: {query}\n\n")
@@ -10063,46 +10070,28 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                     if not query_embedding:
                         query_embedding = [0] * 384
                     results = await self.process_query(
-                        query,
-                        query_embedding,
-                        outline_embedding,
-                        None,
-                        summary_embedding,
+                        query, query_embedding, outline_embedding, None, summary_embedding
                     )
                     initial_results.extend(results)
 
-                useful_results = [
-                    r for r in initial_results if len(r.get("content", "")) > 200
-                ]
+                useful_results = [r for r in initial_results if len(r.get("content", "")) > 200]
                 if not useful_results:
                     await self.emit_message(
                         f"*Unable to find initial search results. Creating research outline based on the query alone.*\n\n"
                     )
                     initial_results = [
-                        {
-                            "title": f"Information about {user_message}",
-                            "url": "",
-                            "content": f"Placeholder for research about {user_message}.",
-                            "query": user_message,
-                        }
+                        {"title": f"Information about {user_message}", "url": "", "content": f"Placeholder for research about {user_message}.", "query": user_message}
                     ]
                 else:
-                    logger.info(
-                        f"Found {len(useful_results)} useful results from initial queries"
-                    )
+                    logger.info(f"Found {len(useful_results)} useful results from initial queries")
 
-                await self.emit_status(
-                    "info",
-                    "Analyzing initial results and generating research outline...",
-                    False,
-                )
+                await self.emit_status("info", "Analyzing initial results and generating research outline...", False)
                 # ... [Outline generation logic from original file, including the two-pass method] ...
                 # This part generates `research_outline` and `all_topics`.
                 # ... [Assume this logic is copied and works] ...
                 research_outline = []
                 try:
                     import time
-
                     start_time = time.time()
                     logger.info("Starting two-pass outline generation.")
 
@@ -10302,16 +10291,14 @@ Format your response as a clear, structured Markdown list. For example:
             prev_summary = state.get("prev_comprehensive_summary", "")
             if prev_summary:
                 summary_embedding = await self.get_embedding(prev_summary)
-
-        initial_results = state.get(
-            "results_history", []
-        )  # Use history as initial results
+        
+        initial_results = state.get("results_history", []) # Use history as initial results
 
         # Update status to show we've moved beyond outline generation
         await self.emit_status(
             "info", "Research outline confirmed. Beginning research cycles...", False
         )
-
+        
         # Initialize research variables for continued cycles
         cycle = 1
         max_cycles = self.valves.MAX_CYCLES
@@ -10646,56 +10633,71 @@ Format your response as a valid JSON object with the following structure:
                     )
                     self.update_state("cycle_summaries", cycle_summaries)
 
-                    # Create the current checklist for display to the user
-                    current_checklist = {
-                        "completed": newly_completed,
-                        "partial": set(analysis_data.get("partial_topics", [])),
-                        "irrelevant": newly_irrelevant,
-                        "new": set(new_topics),
-                        "remaining": set(active_outline),
-                    }
-
-                    # Display analysis to the user
+                    # Display analysis to the user in a collapsible format
                     analysis_text = f"### Research Analysis (Cycle {cycle})\n\n"
                     analysis_text += f"{analysis_data.get('analysis', 'Analysis not available.')}\n\n"
 
+                    # Collapsible section for search results from this cycle
+                    if cycle_results:
+                        results_details = ""
+                        for i, result in enumerate(cycle_results):
+                            title = result.get("title", "N/A")
+                            url = result.get("url", "N/A")
+                            query = result.get("query", "N/A")
+                            content_summary = result.get("content", "")
+                            summary_preview = (
+                                (content_summary[:300] + "...")
+                                if len(content_summary) > 300
+                                else content_summary
+                            )
+
+                            results_details += f"**Result {i+1}: {title}**\n"
+                            results_details += f"URL: {url}\n"
+                            results_details += f"Query: '{query}'\n"
+                            results_details += f"Summary: {summary_preview}\n\n"
+
+                        if results_details:
+                            analysis_text += f"<details>\n<summary>View {len(cycle_results)} search results from this cycle</summary>\n\n{results_details}</details>\n\n"
+
+                    # Collapsible section for detailed topic updates
+                    topic_details = ""
                     if newly_completed:
-                        analysis_text += "**Topics Completed:**\n"
-                        for topic in newly_completed:
-                            analysis_text += f"✓ {topic}\n"
-                        analysis_text += "\n"
-
+                        topic_details += "**Topics Completed:**\n" + "".join(
+                            [f"✓ {topic}\n" for topic in newly_completed]
+                        ) + "\n"
+                    
                     if analysis_data.get("partial_topics"):
-                        partial_topics = analysis_data.get("partial_topics")
-                        analysis_text += "**Topics Partially Addressed:**\n"
-                        # Show only first 5 partial topics
-                        for topic in partial_topics[:5]:
-                            analysis_text += f"⚪ {topic}\n"
-                        # Add count of additional topics if there are more than 5
-                        if len(partial_topics) > 5:
-                            analysis_text += f"...and {len(partial_topics) - 5} more\n"
-                        analysis_text += "\n"
+                        topic_details += (
+                            "**Topics Partially Addressed:**\n"
+                            + "".join(
+                                [
+                                    f"⚪ {topic}\n"
+                                    for topic in analysis_data.get("partial_topics", [])
+                                ]
+                            )
+                            + "\n"
+                        )
 
-                    # Add display for irrelevant topics
                     if newly_irrelevant:
-                        analysis_text += "**Irrelevant/Distraction Topics:**\n"
-                        for topic in newly_irrelevant:
-                            analysis_text += f"✗ {topic}\n"
-                        analysis_text += "\n"
-
+                        topic_details += (
+                            "**Irrelevant/Distraction Topics:**\n"
+                            + "".join([f"✗ {topic}\n" for topic in newly_irrelevant])
+                            + "\n"
+                        )
+                    
                     if new_topics:
-                        analysis_text += "**New Topics Discovered:**\n"
-                        for topic in new_topics:
-                            analysis_text += f"+ {topic}\n"
-                        analysis_text += "\n"
+                        topic_details += "**New Topics Discovered:**\n" + "".join(
+                            [f"+ {topic}\n" for topic in new_topics]
+                        ) + "\n"
 
                     if active_outline:
-                        analysis_text += "**Remaining Topics:**\n"
-                        for topic in active_outline[:5]:  # Show just the first 5
-                            analysis_text += f"□ {topic}\n"
-                        if len(active_outline) > 5:
-                            analysis_text += f"...and {len(active_outline) - 5} more\n"
-                        analysis_text += "\n"
+                        topic_details += "**Remaining Topics:**\n" + "".join(
+                            [f"□ {topic}\n" for topic in active_outline]
+                        ) + "\n"
+                    
+                    if topic_details:
+                        analysis_text += f"<details>\n<summary>View detailed topic updates</summary>\n\n{topic_details}</details>\n\n"
+
 
                     # Store dimension coverage in state but don't display it during cycles
                     research_dimensions = state.get("research_dimensions")
