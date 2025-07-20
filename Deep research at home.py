@@ -1,8 +1,6 @@
 # UPDATED July 20, 2025
-# Fixed buntch of bugs that leads to freezez anc backend crash
-# Also added 
-# More info on github: https://github.com/atineiatte/deep-research-at-home
-# Make sure you use my gemma3 system prompt too
+# Fixed bugs that leads to crashes
+# More info on github: https://github.com/codyzazzy/Deep-research-at-home
 
 import logging
 import json
