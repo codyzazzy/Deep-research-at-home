@@ -138,3 +138,5 @@ formats: ["html", "json"]
 
 Your updated plugin is now backed by a robust, local, privacy-friendly search engine with crash-resilience and high performance.
 No external APIs. No instability. Just reliable research — powered entirely by you.
+
+And of course, big shourout to @radeon for making the original deep research at home pipe on openwebui, all I did is fixed bugs for him and did some improvements in my openion.
